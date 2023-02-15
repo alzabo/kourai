@@ -20,7 +20,7 @@ import (
 var (
 	excludedExpr = regexp.MustCompile(`(?i)sample`)
 	episodeExpr  = regexp.MustCompile(`(?i)(s\d+e\d+)`)
-	sentinelExpr = regexp.MustCompile(`(?i)(\d{3,4}[ip]|s\d{2}|limited|unrated)`)
+	sentinelExpr = regexp.MustCompile(`(?i)\b(\d{3,4}[ip]|limited|unrated|web(-dl|rip)|bluray|10bit|pal|re(rip|pack)|dvdrip)\b`)
 	seasonExpr   = regexp.MustCompile(`(?i)s(\d+)`)
 	dateExpr     = regexp.MustCompile(`(\b(?:19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
 	title        = cases.Title(language.AmericanEnglish, cases.NoLower)
@@ -123,7 +123,13 @@ func (m Media) target(d string) string {
 			return ""
 		}
 
-		path = fmt.Sprintf("tv/%s/%s/%s", m.Title, season, file)
+		ext := filepath.Ext(file)
+
+		if m.TvEpisode.Title == "" {
+			path = fmt.Sprintf("tv/%s/%s/%s - %s%s", m.Title, season, m.Title, strings.ToUpper(m.TvEpisode.ID), ext)
+		} else {
+			path = fmt.Sprintf("tv/%s/%s/%s - %s - %s%s", m.Title, season, m.Title, strings.ToUpper(m.TvEpisode.ID), m.TvEpisode.Title, ext)
+		}
 	}
 
 	return filepath.Join(d, path)
@@ -200,21 +206,28 @@ func (l Link) Create() {
 func NewMedia(p string) Media {
 	m := Media{}
 	m.Path = p
+	m.TvEpisode = Episode{
+		Season:  -1,
+		Episode: -1,
+	}
 
 	d, f := filepath.Split(p)
 	d = filepath.Base(d)
 	for _, name := range []string{f, d} {
 		end := len(name)
 		epLoc := episodeExpr.FindStringIndex(name)
+
 		if epLoc != nil {
+			if epLoc[0] > 0 {
+				end = epLoc[0] - 1
+			}
+
 			m.Type = TV
-			m.TvEpisode = Episode{}
 			m.TvEpisode.ID = name[epLoc[0]:epLoc[1]]
 			{
 				season, err := strconv.Atoi(seasonExpr.FindString(m.TvEpisode.ID)[1:])
 				if err != nil {
 					fmt.Println("error parsing season number", err)
-					m.TvEpisode.Season = -1
 				} else {
 					m.TvEpisode.Season = season
 				}
@@ -225,14 +238,10 @@ func NewMedia(p string) Media {
 					episode, err := strconv.Atoi(ep)
 					if err != nil {
 						fmt.Print("error parsing episode number", err)
-						m.TvEpisode.Episode = -1
 					} else {
 						m.TvEpisode.Episode = episode
 					}
 				}
-			}
-			if epLoc[0] > 0 {
-				end = epLoc[0] - 1
 			}
 		}
 		dateLoc := dateExpr.FindStringIndex(name)
@@ -246,13 +255,40 @@ func NewMedia(p string) Media {
 		if sLoc != nil && sLoc[0] > 0 && sLoc[0] < end {
 			end = sLoc[0] - 1
 		}
-		parsed := name[:end]
 		if dateLoc != nil || epLoc != nil {
-			m.Title = title.String(strings.TrimRight(strings.ReplaceAll(parsed, ".", " "), " -_"))
+			n := name[:end]
+			m.Title = makeTitle(n)
+		}
+		if epLoc != nil {
+			start := epLoc[1] + 1
+			end := len(name)
+			if dateLoc != nil && dateLoc[0] < end && dateLoc[0]-1 > start {
+				end = dateLoc[0] - 1
+			}
+			//if sLoc != nil {
+			//	fmt.Println(name, "start:", start, "end:", end, "sentinel:", name[sLoc[0]:sLoc[1]], "sLog[0]:", sLoc[0], "episode", epLoc[1])
+			//}
+			if sLoc != nil && sLoc[0] < end {
+				if sLoc[0] > start {
+					end = sLoc[0] - 1
+				}
+				// If the slice start is the same as the sentinel match, the
+				// title is probably not in the name
+				if sLoc[0] == start {
+					end = start
+				}
+			}
+			n := name[start:end]
+			m.TvEpisode.Title = makeTitle(n)
 		}
 	}
 
 	return m
+}
+
+// Normalize a title
+func makeTitle(s string) string {
+	return title.String(strings.Trim(strings.ReplaceAll(s, ".", " "), "_- "))
 }
 
 func FindFiles(f string, exts []string, excludes []string) ([]Media, error) {
