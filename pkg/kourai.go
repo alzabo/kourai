@@ -19,7 +19,7 @@ import (
 
 var (
 	excludedExpr = regexp.MustCompile(`(?i)sample`)
-	episodeExpr  = regexp.MustCompile(`(?i)(s\d+e\d+)`)
+	episodeExpr  = regexp.MustCompile(`(?i)(s\d+)(e\d+)-?(e\d+)*`)
 	sentinelExpr = regexp.MustCompile(`(?i)\b(\d{3,4}[ip]|limited|unrated|web(-dl|rip)|bluray|10bit|pal|re(rip|pack)|dvdrip)\b`)
 	seasonExpr   = regexp.MustCompile(`(?i)s(\d+)`)
 	dateExpr     = regexp.MustCompile(`(\b(?:19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
@@ -123,12 +123,19 @@ func (m Media) target(d string) string {
 			return ""
 		}
 
+		ep := strings.ToUpper(m.TvEpisode.ID)
+		// format episodes the way plex likes, including episode IDs
+		eps := strings.Split(strings.ToLower(m.TvEpisode.ID), "e")
+		if len(eps) > 2 {
+			ep = strings.ToUpper(fmt.Sprintf("%se%s-e%s", eps[0], eps[1], eps[len(eps)-1]))
+		}
+
 		ext := filepath.Ext(file)
 
 		if m.TvEpisode.Title == "" {
-			path = fmt.Sprintf("tv/%s/%s/%s - %s%s", m.Title, season, m.Title, strings.ToUpper(m.TvEpisode.ID), ext)
+			path = fmt.Sprintf("tv/%s/%s/%s - %s%s", m.Title, season, m.Title, ep, ext)
 		} else {
-			path = fmt.Sprintf("tv/%s/%s/%s - %s - %s%s", m.Title, season, m.Title, strings.ToUpper(m.TvEpisode.ID), m.TvEpisode.Title, ext)
+			path = fmt.Sprintf("tv/%s/%s/%s - %s - %s%s", m.Title, season, m.Title, ep, m.TvEpisode.Title, ext)
 		}
 	}
 
@@ -233,14 +240,12 @@ func NewMedia(p string) Media {
 				}
 			}
 			{
-				_, ep, ok := strings.Cut(strings.ToLower(m.TvEpisode.ID), "e")
-				if ok {
-					episode, err := strconv.Atoi(ep)
-					if err != nil {
-						fmt.Print("error parsing episode number", err)
-					} else {
-						m.TvEpisode.Episode = episode
-					}
+				eps := strings.Split(strings.ToLower(m.TvEpisode.ID), "e")
+				episode, err := strconv.Atoi(eps[1])
+				if err != nil {
+					fmt.Print("error parsing episode number", err)
+				} else {
+					m.TvEpisode.Episode = episode
 				}
 			}
 		}
