@@ -24,6 +24,7 @@ var (
 	seasonExpr   = regexp.MustCompile(`(?i)s(\d+)`)
 	dateExpr     = regexp.MustCompile(`(\b(?:19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
 	title        = cases.Title(language.AmericanEnglish, cases.NoLower)
+	cache        = make(map[string]string)
 )
 
 const (
@@ -74,20 +75,14 @@ type Media struct {
 func (m *Media) TMDBLookup(c *tmdb.TMDb) {
 	opts := map[string]string{}
 	if m.Type == TV {
-		// nothing is done with this right now
-		//c.SearchTv(m.Title, opts)
-		res, err := c.SearchTv(m.Title, opts)
-		_ = res
-		if err != nil {
-			fmt.Println("error looking up tv series with title", m.Title, err)
-		}
+		lookupTV(c, m)
 	} else {
 		res, err := c.SearchMovie(m.Title, opts)
 		if err != nil {
 			fmt.Println("error looking up movie with title", m.Title, err)
 			return
 		}
-		title, err := MatchMovieSearch(*m, res)
+		title, err := MatchMovieSearch(m, res)
 		if err != nil {
 			fmt.Println(err)
 			return
@@ -142,7 +137,7 @@ func (m Media) target(d string) string {
 	return filepath.Join(d, path)
 }
 
-func MatchMovieSearch(m Media, res *tmdb.MovieSearchResults) (tmdb.MovieShort, error) {
+func MatchMovieSearch(m *Media, res *tmdb.MovieSearchResults) (tmdb.MovieShort, error) {
 	switch len(res.Results) {
 	case 0:
 		return tmdb.MovieShort{}, fmt.Errorf("no results found in search for %v", m)
@@ -161,17 +156,58 @@ func MatchMovieSearch(m Media, res *tmdb.MovieSearchResults) (tmdb.MovieShort, e
 		case 1:
 			return match[0], nil
 		default:
-			dists := sort.IntSlice{}
-			distMap := map[int]tmdb.MovieShort{}
-			for _, i := range match {
-				d := levenshtein.ComputeDistance(m.Title, i.Title)
-				dists = append(dists, d)
-				distMap[d] = i
+			names := make([]string, len(res.Results))
+			for i, j := range res.Results {
+				names[i] = j.Title
 			}
-			dists.Sort()
-			return distMap[dists[0]], nil
+			return res.Results[BestMatchIndex(m.Title, names)], nil
 		}
 	}
+}
+
+func lookupTV(c *tmdb.TMDb, m *Media) error {
+	options := map[string]string{}
+
+	if title, ok := cache[m.Title]; ok {
+		m.Title = title
+		fmt.Println("cache hit for", m)
+		return nil
+	}
+
+	res, err := c.SearchTv(m.Title, options)
+	if err != nil {
+		return fmt.Errorf("failed to look up %v", m)
+	}
+
+	switch len(res.Results) {
+	case 0:
+		return fmt.Errorf("no results found in search for %v", m)
+	case 1:
+		cache[m.Title] = res.Results[0].Name
+		m.Title = cache[m.Title]
+		return nil
+	default:
+		names := make([]string, len(res.Results))
+		for i, j := range res.Results {
+			names[i] = j.Name
+		}
+		t := names[BestMatchIndex(m.Title, names)]
+		cache[m.Title] = t
+		m.Title = t
+		return nil
+	}
+}
+
+func BestMatchIndex(s string, c []string) int {
+	dists := sort.IntSlice{}
+	dMap := map[int]int{}
+	for i, j := range c {
+		d := levenshtein.ComputeDistance(s, j)
+		dists = append(dists, d)
+		dMap[d] = i
+	}
+	dists.Sort()
+	return dMap[dists[0]]
 }
 
 func DateMatch(d1, d2 string) bool {
@@ -241,9 +277,10 @@ func NewMedia(p string) Media {
 			}
 			{
 				eps := strings.Split(strings.ToLower(m.TvEpisode.ID), "e")
-				episode, err := strconv.Atoi(eps[1])
+				episode, err := strconv.Atoi(strings.TrimSuffix(eps[1], "-"))
+
 				if err != nil {
-					fmt.Print("error parsing episode number", err)
+					fmt.Println("error parsing episode number from", m.TvEpisode.ID, "with error", err)
 				} else {
 					m.TvEpisode.Episode = episode
 				}
