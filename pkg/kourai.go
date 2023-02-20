@@ -105,12 +105,15 @@ func (m Media) String() string {
 func (m Media) target(d string) string {
 	_, file := filepath.Split(m.Path)
 	path := ""
+	mediaDir := ""
+	if m.Date != "" {
+		mediaDir = fmt.Sprintf("%s (%s)", m.Title, m.Date)
+	} else {
+		mediaDir = m.Title
+	}
+
 	if m.Type != TV {
-		if m.Date != "" {
-			path = fmt.Sprintf("movies/%s (%s)/%s", m.Title, m.Date, file)
-		} else {
-			path = fmt.Sprintf("movies/%s/%s", m.Title, file)
-		}
+		path = fmt.Sprintf("movies/%s/%s", mediaDir, file)
 	}
 	if m.Type == TV {
 		season := ""
@@ -129,15 +132,15 @@ func (m Media) target(d string) string {
 		// format episodes the way plex likes, including episode IDs
 		eps := strings.Split(strings.ToLower(m.TvEpisode.ID), "e")
 		if len(eps) > 2 {
-			ep = strings.ToUpper(fmt.Sprintf("%se%s-e%s", eps[0], eps[1], eps[len(eps)-1]))
+			ep = strings.ToUpper(fmt.Sprintf("%se%s-e%s", eps[0], strings.Trim(eps[1], "-"), strings.Trim(eps[len(eps)-1], "-")))
 		}
 
 		ext := filepath.Ext(file)
 
 		if m.TvEpisode.Title == "" {
-			path = fmt.Sprintf("tv/%s/%s/%s - %s%s", m.Title, season, m.Title, ep, ext)
+			path = fmt.Sprintf("tv/%s/%s/%s - %s%s", mediaDir, season, m.Title, ep, ext)
 		} else {
-			path = fmt.Sprintf("tv/%s/%s/%s - %s - %s%s", m.Title, season, m.Title, ep, m.TvEpisode.Title, ext)
+			path = fmt.Sprintf("tv/%s/%s/%s - %s - %s%s", mediaDir, season, m.Title, ep, m.TvEpisode.Title, ext)
 		}
 	}
 
