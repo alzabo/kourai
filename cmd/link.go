@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	srcsDefault []string = []string{"./"}
-	dryRun      bool
+	srcsDefault    []string = []string{"./"}
+	dryRun         bool
+	skipTitleCaser bool
 )
 
 // linkCmd represents the link command
@@ -37,9 +38,13 @@ to quickly create a Cobra application.`,
 		}
 
 		exc := kourai.NewExcludes(excludes, excludeMovies, excludeTv)
+		opts := kourai.Options{
+			APIKey:         key,
+			SkipTitleCaser: skipTitleCaser,
+		}
 
 		//err := kourai.FindFiles(args[0], extensions)
-		link, err := kourai.LinkFromFiles(args, extensions, exc, dest, key)
+		link, err := kourai.LinkFromFiles(args, extensions, exc, dest, opts)
 		if err != nil {
 			fmt.Println("encountered error:", err)
 			os.Exit(1)
@@ -70,4 +75,5 @@ func init() {
 	linkCmd.MarkFlagRequired("dest")
 
 	linkCmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "Run without making any changes to files")
+	linkCmd.Flags().BoolVarP(&skipTitleCaser, "keep-title-case", "k", false, "Don't alter title case")
 }

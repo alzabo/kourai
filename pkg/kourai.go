@@ -25,6 +25,7 @@ var (
 	dateExpr     = regexp.MustCompile(`(\b(?:19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
 	title        = cases.Title(language.AmericanEnglish, cases.NoLower)
 	cache        = make(map[string]string)
+	options      = Options{}
 )
 
 const (
@@ -32,6 +33,11 @@ const (
 	Unknown = iota
 	TV      = iota
 )
+
+type Options struct {
+	SkipTitleCaser bool
+	APIKey         string
+}
 
 type Excludes struct {
 	Types    map[int]bool
@@ -70,6 +76,7 @@ type Media struct {
 	Date      string
 	Title     string
 	TvEpisode Episode
+	tmdbID    int
 }
 
 func (m *Media) TMDBLookup(c *tmdb.TMDb) {
@@ -170,31 +177,33 @@ func lookupTV(c *tmdb.TMDb, m *Media) error {
 
 	if title, ok := cache[m.Title]; ok {
 		m.Title = title
-		fmt.Println("cache hit for", m)
+		//fmt.Println("cache hit for", m)
 		return nil
-	}
-
-	res, err := c.SearchTv(m.Title, options)
-	if err != nil {
-		return fmt.Errorf("failed to look up %v", m)
-	}
-
-	switch len(res.Results) {
-	case 0:
-		return fmt.Errorf("no results found in search for %v", m)
-	case 1:
-		cache[m.Title] = res.Results[0].Name
-		m.Title = cache[m.Title]
-		return nil
-	default:
-		names := make([]string, len(res.Results))
-		for i, j := range res.Results {
-			names[i] = j.Name
+	} else {
+		res, err := c.SearchTv(m.Title, options)
+		if err != nil {
+			return fmt.Errorf("failed to look up %v", m)
 		}
-		t := names[BestMatchIndex(m.Title, names)]
-		cache[m.Title] = t
-		m.Title = t
-		return nil
+
+		switch len(res.Results) {
+		case 0:
+			return fmt.Errorf("no results found in search for %v", m)
+		case 1:
+			cache[m.Title] = res.Results[0].Name
+			m.Title = cache[m.Title]
+			m.tmdbID = res.Results[0].ID
+			return nil
+		default:
+			names := make([]string, len(res.Results))
+			for i, j := range res.Results {
+				names[i] = j.Name
+			}
+			i := BestMatchIndex(m.Title, names)
+			cache[m.Title] = names[i]
+			m.Title = names[i]
+			m.tmdbID = res.Results[i].ID
+			return nil
+		}
 	}
 }
 
@@ -330,7 +339,12 @@ func NewMedia(p string) Media {
 
 // Normalize a title
 func makeTitle(s string) string {
-	return title.String(strings.Trim(strings.ReplaceAll(s, ".", " "), "_- "))
+	t := strings.Trim(strings.ReplaceAll(s, ".", " "), "_- ")
+	if options.SkipTitleCaser {
+		return t
+	} else {
+		return title.String(t)
+	}
 }
 
 func FindFiles(f string, exts []string, excludes []string) ([]Media, error) {
@@ -368,9 +382,10 @@ func FindFiles(f string, exts []string, excludes []string) ([]Media, error) {
 	return media, err
 }
 
-func LinkFromFiles(f []string, exts []string, excludes Excludes, dest string, key string) ([]Link, error) {
+func LinkFromFiles(f []string, exts []string, excludes Excludes, dest string, opts Options) ([]Link, error) {
 	links := []Link{}
-	tmdbClient := tmdb.Init(tmdb.Config{APIKey: key})
+	options = opts
+	tmdbClient := tmdb.Init(tmdb.Config{APIKey: options.APIKey})
 
 	for _, i := range f {
 		media, err := FindFiles(i, exts, excludes.Patterns)
@@ -383,7 +398,7 @@ func LinkFromFiles(f []string, exts []string, excludes Excludes, dest string, ke
 			if excludes.Type(m.Type) {
 				continue
 			}
-			if key != "" {
+			if options.APIKey != "" {
 				m.TMDBLookup(tmdbClient)
 			}
 			target := m.target(dest)
