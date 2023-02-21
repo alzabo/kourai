@@ -34,9 +34,11 @@ const (
 	TV      = iota
 )
 
-type lookupCache struct {
-	title map[string]string
-	id    map[string]int
+type lookupCache map[string]lookupItems
+
+type lookupItems struct {
+	title string
+	id    int
 }
 
 type Options struct {
@@ -47,11 +49,6 @@ type Options struct {
 type Excludes struct {
 	Types    map[int]bool
 	Patterns []string
-}
-
-func init() {
-	cache.id = map[string]int{}
-	cache.title = map[string]string{}
 }
 
 func (e *Excludes) Type(t int) (ok bool) {
@@ -189,13 +186,9 @@ func MatchMovieSearch(m *Media, res *tmdb.MovieSearchResults) (tmdb.MovieShort, 
 func lookupTV(c *tmdb.TMDb, m *Media) error {
 	options := map[string]string{}
 
-	if title, ok := cache.title[m.Title]; ok {
-		m.Title = title
-
-		// TODO: This is a bit janky. Somewhat less janky would be to
-		// cache a struct so it's one lookup
-		m.tmdbID = cache.id[m.Title]
-		//fmt.Println("cache hit for", m)
+	if l, ok := cache[m.Title]; ok {
+		m.Title = l.title
+		m.tmdbID = l.id
 		return nil
 	} else {
 		res, err := c.SearchTv(m.Title, options)
@@ -207,11 +200,13 @@ func lookupTV(c *tmdb.TMDb, m *Media) error {
 		case 0:
 			return fmt.Errorf("no results found in search for %v", m)
 		case 1:
-			cache.title[m.Title] = res.Results[0].Name
-			m.Title = res.Results[0].Name
-
-			cache.id[m.Title] = res.Results[0].ID
-			m.tmdbID = res.Results[0].ID
+			e := lookupItems{
+				res.Results[0].Name,
+				res.Results[0].ID,
+			}
+			cache[m.Title] = e
+			m.Title = e.title
+			m.tmdbID = e.id
 			return nil
 		default:
 			names := make([]string, len(res.Results))
@@ -219,11 +214,13 @@ func lookupTV(c *tmdb.TMDb, m *Media) error {
 				names[i] = j.Name
 			}
 			i := BestMatchIndex(m.Title, names)
-			cache.title[m.Title] = names[i]
-			m.Title = names[i]
-
-			cache.id[m.Title] = res.Results[i].ID
-			m.tmdbID = res.Results[i].ID
+			e := lookupItems{
+				names[i],
+				res.Results[i].ID,
+			}
+			cache[m.Title] = e
+			m.Title = e.title
+			m.tmdbID = e.id
 			return nil
 		}
 	}
