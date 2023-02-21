@@ -24,7 +24,7 @@ var (
 	seasonExpr   = regexp.MustCompile(`(?i)s(\d+)`)
 	dateExpr     = regexp.MustCompile(`(\b(?:19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
 	title        = cases.Title(language.AmericanEnglish, cases.NoLower)
-	cache        = make(map[string]string)
+	cache        = lookupCache{}
 	options      = Options{}
 )
 
@@ -34,6 +34,11 @@ const (
 	TV      = iota
 )
 
+type lookupCache struct {
+	title map[string]string
+	id    map[string]int
+}
+
 type Options struct {
 	SkipTitleCaser bool
 	APIKey         string
@@ -42,6 +47,11 @@ type Options struct {
 type Excludes struct {
 	Types    map[int]bool
 	Patterns []string
+}
+
+func init() {
+	cache.id = map[string]int{}
+	cache.title = map[string]string{}
 }
 
 func (e *Excludes) Type(t int) (ok bool) {
@@ -83,6 +93,7 @@ func (m *Media) TMDBLookup(c *tmdb.TMDb) {
 	opts := map[string]string{}
 	if m.Type == TV {
 		lookupTV(c, m)
+		lookupEpisode(c, m)
 	} else {
 		res, err := c.SearchMovie(m.Title, opts)
 		if err != nil {
@@ -178,8 +189,12 @@ func MatchMovieSearch(m *Media, res *tmdb.MovieSearchResults) (tmdb.MovieShort, 
 func lookupTV(c *tmdb.TMDb, m *Media) error {
 	options := map[string]string{}
 
-	if title, ok := cache[m.Title]; ok {
+	if title, ok := cache.title[m.Title]; ok {
 		m.Title = title
+
+		// TODO: This is a bit janky. Somewhat less janky would be to
+		// cache a struct so it's one lookup
+		m.tmdbID = cache.id[m.Title]
 		//fmt.Println("cache hit for", m)
 		return nil
 	} else {
@@ -192,8 +207,10 @@ func lookupTV(c *tmdb.TMDb, m *Media) error {
 		case 0:
 			return fmt.Errorf("no results found in search for %v", m)
 		case 1:
-			cache[m.Title] = res.Results[0].Name
-			m.Title = cache[m.Title]
+			cache.title[m.Title] = res.Results[0].Name
+			m.Title = res.Results[0].Name
+
+			cache.id[m.Title] = res.Results[0].ID
 			m.tmdbID = res.Results[0].ID
 			return nil
 		default:
@@ -202,12 +219,26 @@ func lookupTV(c *tmdb.TMDb, m *Media) error {
 				names[i] = j.Name
 			}
 			i := BestMatchIndex(m.Title, names)
-			cache[m.Title] = names[i]
+			cache.title[m.Title] = names[i]
 			m.Title = names[i]
+
+			cache.id[m.Title] = res.Results[i].ID
 			m.tmdbID = res.Results[i].ID
 			return nil
 		}
 	}
+}
+
+func lookupEpisode(c *tmdb.TMDb, m *Media) error {
+	if m.tmdbID == 0 {
+		return fmt.Errorf("could not look up episode; TMDB ID not set for %v", m)
+	}
+	ep, err := c.GetTvEpisodeInfo(m.tmdbID, m.TvEpisode.Season, m.TvEpisode.Episode, map[string]string{})
+	if err != nil {
+		return fmt.Errorf("failed to look up episode with error %v", err)
+	}
+	m.TvEpisode.Title = ep.Name
+	return nil
 }
 
 func BestMatchIndex(s string, c []string) int {
