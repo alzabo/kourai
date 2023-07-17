@@ -1,6 +1,7 @@
 package kourai
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -20,7 +21,7 @@ import (
 var (
 	excludedExpr = regexp.MustCompile(`(?i)sample`)
 	episodeExpr  = regexp.MustCompile(`(?i)(s\d+)(e\d+)-?(e\d+)*`)
-	sentinelExpr = regexp.MustCompile(`(?i)\b(\d{3,4}[ip]|limited|unrated|web(-dl|rip)|bluray|10bit|pal|re(rip|pack)|dvdrip)\b`)
+	sentinelExpr = regexp.MustCompile(`(?i)\b(\d{3,4}[ip]|limited|unrated|web(-dl|rip)|bluray|10bit|pal|re(rip|pack)|dvdrip|a\.k\.a\.?|aka)\b`)
 	seasonExpr   = regexp.MustCompile(`(?i)s(\d+)`)
 	dateExpr     = regexp.MustCompile(`(\b(?:19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
 	title        = cases.Title(language.AmericanEnglish, cases.NoLower)
@@ -87,22 +88,11 @@ type Media struct {
 }
 
 func (m *Media) TMDBLookup(c *tmdb.TMDb) {
-	opts := map[string]string{}
 	if m.Type == TV {
 		lookupTV(c, m)
 		lookupEpisode(c, m)
 	} else {
-		res, err := c.SearchMovie(m.Title, opts)
-		if err != nil {
-			fmt.Println("error looking up movie with title", m.Title, err)
-			return
-		}
-		title, err := MatchMovieSearch(m, res)
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		m.Title = title.Title
+		lookupMovie(c, m)
 	}
 }
 
@@ -238,6 +228,82 @@ func lookupEpisode(c *tmdb.TMDb, m *Media) error {
 	return nil
 }
 
+// When a match can't be found immediately, the search is retried
+// in a loop by removing one word at a time from the end of the title.
+// To prevent instances of matching on 1 word out of many, which is
+// unlikely to yield an accurate match, the number of times the search
+// will be retried with a modified title is limited.
+func lookupMovie(c *tmdb.TMDb, m *Media) error {
+	opts := map[string]string{}
+	title := m.Title
+	limit := (strings.Count(m.Title, " ") + 1) / 3
+
+	// TODO
+	// /mnt/qbittorrent/qBittorrent/downloads/04 ~ Dirty Pair The Movie (1986) (BDRip 1792x1080p x265 HEVC FLAC, AC-3x2 2.0x3)(Triple Audio)[sxales]/Dirty Pair The Movie (1986) (BDRip 1792x1080p x265 HEVC FLAC, AC-3x2 2.0x3)(Triple Audio)[sxales].mkv   /idk/movies/Captain Tsubasa Movie 04: The great world competition The Junior World Cup (1986)/Dirty Pair The Movie (1986) (BDRip 1792x1080p x265 HEVC FLAC, AC-3x2 2.0x3)(Triple Audio)[sxales].mkv
+	for i := 0; i <= limit; i++ {
+		if title == "" {
+			return fmt.Errorf("failed to look up movie with title %s", m.Title)
+		}
+		fmt.Println("Searching for movie", title)
+		res, err := c.SearchMovie(title, opts)
+		if err != nil {
+			return fmt.Errorf("error looking up movie with title %s", title)
+		}
+		switch len(res.Results) {
+		case 0:
+			// pop a word off the end and continue
+			t, err := titlePop(title)
+			if err != nil {
+				return err
+			}
+			title = t
+			continue
+		case 1:
+			m.Title = res.Results[0].Title
+			return nil
+		default:
+			match := []tmdb.MovieShort{}
+			for _, movie := range res.Results {
+				if err != nil {
+					fmt.Println("failed to retrieve movie releases")
+				}
+				if movieDateMatch(m.Date, movie.ReleaseDate) {
+					match = append(match, movie)
+				}
+			}
+			switch len(match) {
+			case 0:
+				// pop a word off the end and continue
+				t, err := titlePop(title)
+				if err != nil {
+					return err
+				}
+				title = t
+				continue
+			case 1:
+				m.Title = match[0].Title
+				return nil
+			default:
+				names := make([]string, len(res.Results))
+				for i, j := range res.Results {
+					names[i] = j.Title
+				}
+				m.Title = res.Results[BestMatchIndex(title, names)].Title
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+func titlePop(t string) (string, error) {
+	items := strings.Split(t, " ")
+	if len(items) < 1 {
+		return "", errors.New("created empty string when removing last word")
+	}
+	return strings.Join(items[0:len(items)-1], " "), nil
+}
+
 func BestMatchIndex(s string, c []string) int {
 	dists := sort.IntSlice{}
 	dMap := map[int]int{}
@@ -258,6 +324,37 @@ func DateMatch(d1, d2 string) bool {
 	y1, _, _ := strings.Cut(d1, "-")
 	y2, _, _ := strings.Cut(d2, "-")
 	return y1 == y2
+}
+
+// some media has a date that is earlier than what TMDB
+// returns because TMDB seems to use the theatrical premier
+// however some media have a limited premier, particularly
+// at festivals, that are often used as the release year
+// otherwise
+func movieDateMatch(parsedDate, date string) bool {
+	if parsedDate == date {
+		return true
+	}
+
+	parsedYearString, _, _ := strings.Cut(parsedDate, "-")
+	dateYearString, _, _ := strings.Cut(date, "-")
+
+	parsedYear, err := strconv.Atoi(parsedYearString)
+	if err != nil {
+		return false
+	}
+
+	dateYear, err := strconv.Atoi(dateYearString)
+	if err != nil {
+		return false
+	}
+
+	for i := 0; i < 2; i++ {
+		if parsedYear+i == dateYear {
+			return true
+		}
+	}
+	return false
 }
 
 type Link struct {
@@ -286,6 +383,7 @@ func (l Link) Create() {
 	}
 }
 
+// func NewLinks(Option...) []Link
 func NewMedia(p string) Media {
 	m := Media{}
 	m.Path = p
