@@ -43,32 +43,68 @@ type lookupItems struct {
 }
 
 type Options struct {
-	SkipTitleCaser bool
-	APIKey         string
+	SkipTitleCaser  bool
+	TMDBClient      *tmdb.TMDb
+	fileNameFilters []RegexpFilter
+	sources         []string
+	dest            string
+	excludeTypes    []int
 }
 
-type Excludes struct {
-	Types    map[int]bool
-	Patterns []string
-}
+type Option func(*Options)
 
-func (e *Excludes) Type(t int) (ok bool) {
-	_, ok = e.Types[t]
-	return
-}
-
-func NewExcludes(p []string, movies bool, tv bool) Excludes {
-	e := Excludes{}
-	e.Patterns = p
-
-	e.Types = map[int]bool{}
-	if movies {
-		e.Types[Movie] = true
+func WithIncludedFileExtensions(exts []string) Option {
+	exprs := []string{}
+	for _, e := range exts {
+		exprs = append(exprs, fmt.Sprintf(`(?i)\.%s$`, e))
 	}
-	if tv {
-		e.Types[TV] = true
+	return func(o *Options) {
+		o.fileNameFilters = append(o.fileNameFilters, NewRegexpFilter(exprs, []string{}))
 	}
-	return e
+}
+
+func WithExcludedPatterns(p []string) Option {
+	return func(o *Options) {
+		o.fileNameFilters = append(o.fileNameFilters, NewRegexpFilter([]string{}, p))
+	}
+}
+
+func WithTMDBApiKey(k string) Option {
+	return func(o *Options) {
+		if k == "" {
+			return
+		}
+		o.TMDBClient = tmdb.Init(tmdb.Config{APIKey: k})
+	}
+}
+
+func WithTitleCaserDisabled(disabled bool) Option {
+	return func(o *Options) {
+		o.SkipTitleCaser = disabled
+	}
+}
+
+func WithDestination(dest string) Option {
+	return func(o *Options) {
+		o.dest = dest
+	}
+}
+
+func WithSources(sources []string) Option {
+	return func(o *Options) {
+		o.sources = sources
+	}
+}
+
+func WithExcludedTypes(movies bool, tv bool) Option {
+	return func(o *Options) {
+		if movies {
+			o.excludeTypes = append(o.excludeTypes, Movie)
+		}
+		if tv {
+			o.excludeTypes = append(o.excludeTypes, TV)
+		}
+	}
 }
 
 type Episode struct {
@@ -244,7 +280,8 @@ func lookupMovie(c *tmdb.TMDb, m *Media) error {
 		if title == "" {
 			return fmt.Errorf("failed to look up movie with title %s", m.Title)
 		}
-		fmt.Println("Searching for movie", title)
+		// TODO: debug log
+		// fmt.Println("Searching for movie", title)
 		res, err := c.SearchMovie(title, opts)
 		if err != nil {
 			return fmt.Errorf("error looking up movie with title %s", title)
@@ -327,7 +364,7 @@ func DateMatch(d1, d2 string) bool {
 }
 
 // some media has a date that is earlier than what TMDB
-// returns because TMDB seems to use the theatrical premier
+// returns because TMDB seems to use the theatrical premier.
 // however some media have a limited premier, particularly
 // at festivals, that are often used as the release year
 // otherwise
@@ -476,31 +513,62 @@ func makeTitle(s string) string {
 	}
 }
 
-func FindFiles(f string, exts []string, excludes []string) ([]Media, error) {
-	//_, _ = os.Readpath(d)
-	media := []Media{}
-	excludeExpr := []*regexp.Regexp{}
+type RegexpFilter struct {
+	includes []*regexp.Regexp
+	excludes []*regexp.Regexp
+}
+
+func (f RegexpFilter) exclude(n string) bool {
+	for _, e := range f.excludes {
+		if e.MatchString(n) {
+			return true
+		}
+	}
+	return false
+}
+
+func (f RegexpFilter) include(n string) bool {
+	if len(f.includes) == 0 {
+		return true
+	}
+	for _, e := range f.includes {
+		if e.MatchString(n) {
+			return true
+		}
+	}
+	return false
+}
+
+func NewRegexpFilter(includes []string, excludes []string) RegexpFilter {
+	f := RegexpFilter{}
+	for _, p := range includes {
+		f.includes = append(f.includes, regexp.MustCompile(p))
+	}
 	for _, p := range excludes {
-		excludeExpr = append(excludeExpr, regexp.MustCompile(p))
+		f.excludes = append(f.excludes, regexp.MustCompile(p))
 	}
-	if _, err := os.Stat(f); err != nil {
-		return media, err
+	return f
+}
+
+type fileNameFilter interface {
+	exclude(string) bool
+	include(string) bool
+}
+
+func findFiles(root string, filters ...fileNameFilter) ([]Media, error) {
+	media := []Media{}
+	if _, err := os.Stat(root); err != nil {
+		return media, fmt.Errorf("failed to stat %s with error %s", root, err)
 	}
-	err := filepath.WalkDir(f, func(path string, d fs.DirEntry, err error) error {
-		for _, e := range excludeExpr {
-			if e.MatchString(path) {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		for _, filter := range filters {
+			if filter.exclude(path) || !filter.include(path) {
 				return nil
 			}
 		}
-
 		if d.IsDir() {
 			return nil
 		}
-
-		if !selected(d.Name(), exts) {
-			return nil
-		}
-
 		m := NewMedia(path)
 		if m.Title != "" {
 			media = append(media, m)
@@ -511,49 +579,45 @@ func FindFiles(f string, exts []string, excludes []string) ([]Media, error) {
 	return media, err
 }
 
-func LinkFromFiles(f []string, exts []string, excludes Excludes, dest string, opts Options) ([]Link, error) {
-	links := []Link{}
-	options = opts
-	tmdbClient := tmdb.Init(tmdb.Config{APIKey: options.APIKey})
+// NewOptions/NewConfig -> ...Option -> Options or Config
+// file filters
+// media filters?
+// ...
 
-	for _, i := range f {
-		media, err := FindFiles(i, exts, excludes.Patterns)
+// func LinkFromFiles(...Optionf []string, excludes Excludes, dest string, opts Options, options ...Opts) ([]Link, error) {
+func LinkFromFiles(optionConfig ...Option) ([]Link, error) {
+	// TODO: NewOptions
+	options := &Options{}
+	for _, o := range optionConfig {
+		o(options)
+	}
+	links := []Link{}
+	filters := []fileNameFilter{}
+	for _, f := range options.fileNameFilters {
+		filters = append(filters, f)
+	}
+
+	for _, src := range options.sources {
+		media, err := findFiles(src, filters...)
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
 
 		for _, m := range media {
-			if excludes.Type(m.Type) {
-				continue
+			for _, t := range options.excludeTypes {
+				if m.Type == t {
+					continue
+				}
 			}
-			if options.APIKey != "" {
-				m.TMDBLookup(tmdbClient)
+			if options.TMDBClient != nil {
+				m.TMDBLookup(options.TMDBClient)
 			}
-			target := m.target(dest)
+			target := m.target(options.dest)
 			links = append(links, Link{Src: m.Path, Target: target})
 		}
 	}
 	return links, nil
-}
-
-func selected(f string, exts []string) bool {
-	return selectedExt(f, exts) && !exclude(f)
-}
-
-func exclude(f string) bool {
-	return excludedExpr.MatchString(f)
-}
-
-func selectedExt(f string, exts []string) bool {
-	ext := strings.TrimPrefix(filepath.Ext(f), ".")
-
-	sort.Strings(exts)
-	i := sort.SearchStrings(exts, ext)
-	if i == len(exts) {
-		return false
-	}
-	return exts[i] == ext
 }
 
 func Nlinks(d fs.DirEntry) (count uint64, err error) {

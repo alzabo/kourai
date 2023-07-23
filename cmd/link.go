@@ -37,14 +37,15 @@ to quickly create a Cobra application.`,
 			args = srcsDefault
 		}
 
-		exc := kourai.NewExcludes(excludes, excludeMovies, excludeTv)
-		opts := kourai.Options{
-			APIKey:         key,
-			SkipTitleCaser: skipTitleCaser,
-		}
-
-		//err := kourai.FindFiles(args[0], extensions)
-		link, err := kourai.LinkFromFiles(args, extensions, exc, dest, opts)
+		link, err := kourai.LinkFromFiles(
+			kourai.WithDestination(dest),
+			kourai.WithSources(args),
+			kourai.WithIncludedFileExtensions(extensions),
+			kourai.WithExcludedPatterns(excludes),
+			kourai.WithTMDBApiKey(key),
+			kourai.WithTitleCaserDisabled(skipTitleCaser),
+			kourai.WithExcludedTypes(excludeMovies, excludeTv),
+		)
 		if err != nil {
 			fmt.Println("encountered error:", err)
 			os.Exit(1)
