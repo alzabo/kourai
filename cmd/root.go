@@ -14,7 +14,7 @@ import (
 var (
 	cfgFile           string
 	extensions        []string
-	extensionsDefault []string = []string{"mkv", "mp4"}
+	extensionsDefault []string = []string{"avi", "mkv", "mp4"}
 	excludes          []string
 	excludeTv         bool
 	excludeMovies     bool
@@ -55,7 +55,7 @@ func init() {
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
-	rootCmd.PersistentFlags().StringSliceVar(&extensions, "extensions", extensionsDefault, "Help message for extensions")
+	rootCmd.PersistentFlags().StringSliceVarP(&extensions, "extensions", "e", extensionsDefault, "File extensions to consider (case-insensitive)")
 	rootCmd.PersistentFlags().StringSliceVarP(&excludes, "exclude", "x", []string{}, "Patterns to Exclude")
 	rootCmd.PersistentFlags().String("api-key", "", "TMDB API Key")
 
