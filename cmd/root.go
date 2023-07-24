@@ -1,5 +1,5 @@
 /*
-Copyright © 2023 Ryan White <ryan@alzabo.io>
+Copyright © 2023 Ryan White
 */
 package cmd
 

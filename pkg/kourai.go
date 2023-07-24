@@ -19,14 +19,13 @@ import (
 )
 
 var (
-	excludedExpr = regexp.MustCompile(`(?i)sample`)
 	episodeExpr  = regexp.MustCompile(`(?i)(s\d+)(e\d+)-?(e\d+)*`)
 	sentinelExpr = regexp.MustCompile(`(?i)\b(\d{3,4}[ip]|limited|unrated|web(-dl|rip)|bluray|10bit|pal|re(rip|pack)|dvdrip|a\.k\.a\.?|aka)\b`)
 	seasonExpr   = regexp.MustCompile(`(?i)s(\d+)`)
 	dateExpr     = regexp.MustCompile(`(\b(?:19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
 	title        = cases.Title(language.AmericanEnglish, cases.NoLower)
 	cache        = lookupCache{}
-	options      = Options{}
+	options      *Options
 )
 
 const (
@@ -43,12 +42,25 @@ type lookupItems struct {
 }
 
 type Options struct {
-	SkipTitleCaser  bool
-	TMDBClient      *tmdb.TMDb
-	fileNameFilters []RegexpFilter
-	sources         []string
-	dest            string
-	excludeTypes    []int
+	SkipTitleCaser bool
+	TMDBClient     *tmdb.TMDb
+	fileFilters    []fileFilter
+	sources        []string
+	dest           string
+	excludeTypes   []int
+}
+
+func (o *Options) SetOptions(opts ...Option) {
+	for _, setOption := range opts {
+		setOption(o)
+	}
+}
+
+func NewOptions() *Options {
+	o := &Options{}
+	defaultFilter := NewRegexpFilter([]string{}, []string{`(?i)\bsample\b`})
+	o.fileFilters = append(o.fileFilters, defaultFilter)
+	return o
 }
 
 type Option func(*Options)
@@ -59,13 +71,13 @@ func WithIncludedFileExtensions(exts []string) Option {
 		exprs = append(exprs, fmt.Sprintf(`(?i)\.%s$`, e))
 	}
 	return func(o *Options) {
-		o.fileNameFilters = append(o.fileNameFilters, NewRegexpFilter(exprs, []string{}))
+		o.fileFilters = append(o.fileFilters, NewRegexpFilter(exprs, []string{}))
 	}
 }
 
-func WithExcludedPatterns(p []string) Option {
+func WithExcludedPatterns(patterns []string) Option {
 	return func(o *Options) {
-		o.fileNameFilters = append(o.fileNameFilters, NewRegexpFilter([]string{}, p))
+		o.fileFilters = append(o.fileFilters, NewRegexpFilter([]string{}, patterns))
 	}
 }
 
@@ -518,21 +530,22 @@ type RegexpFilter struct {
 	excludes []*regexp.Regexp
 }
 
-func (f RegexpFilter) exclude(n string) bool {
+func (f RegexpFilter) exclude(info fs.FileInfo) bool {
 	for _, e := range f.excludes {
-		if e.MatchString(n) {
+		e := e
+		if e.MatchString(info.Name()) {
 			return true
 		}
 	}
 	return false
 }
 
-func (f RegexpFilter) include(n string) bool {
+func (f RegexpFilter) include(info fs.FileInfo) bool {
 	if len(f.includes) == 0 {
 		return true
 	}
 	for _, e := range f.includes {
-		if e.MatchString(n) {
+		if e.MatchString(info.Name()) {
 			return true
 		}
 	}
@@ -550,24 +563,31 @@ func NewRegexpFilter(includes []string, excludes []string) RegexpFilter {
 	return f
 }
 
-type fileNameFilter interface {
-	exclude(string) bool
-	include(string) bool
+type fileFilter interface {
+	exclude(fs.FileInfo) bool
+	include(fs.FileInfo) bool
 }
 
-func findFiles(root string, filters ...fileNameFilter) ([]Media, error) {
+func findFiles(root string, filters ...fileFilter) ([]Media, error) {
 	media := []Media{}
 	if _, err := os.Stat(root); err != nil {
 		return media, fmt.Errorf("failed to stat %s with error %s", root, err)
 	}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		info, _ := d.Info()
 		for _, filter := range filters {
-			if filter.exclude(path) || !filter.include(path) {
-				return nil
+			// Directories are always included unless they match an exclusion filter
+			if d.IsDir() {
+				if filter.exclude(info) {
+					// TODO: debug logging
+					// fmt.Println("skipping", path)
+					return fs.SkipDir
+				}
+			} else {
+				if filter.exclude(info) || !filter.include(info) {
+					return nil
+				}
 			}
-		}
-		if d.IsDir() {
-			return nil
 		}
 		m := NewMedia(path)
 		if m.Title != "" {
@@ -586,19 +606,11 @@ func findFiles(root string, filters ...fileNameFilter) ([]Media, error) {
 
 // func LinkFromFiles(...Optionf []string, excludes Excludes, dest string, opts Options, options ...Opts) ([]Link, error) {
 func LinkFromFiles(optionConfig ...Option) ([]Link, error) {
-	// TODO: NewOptions
-	options := &Options{}
-	for _, o := range optionConfig {
-		o(options)
-	}
+	options.SetOptions(optionConfig...)
 	links := []Link{}
-	filters := []fileNameFilter{}
-	for _, f := range options.fileNameFilters {
-		filters = append(filters, f)
-	}
 
 	for _, src := range options.sources {
-		media, err := findFiles(src, filters...)
+		media, err := findFiles(src, options.fileFilters...)
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -649,4 +661,8 @@ func Search(f string, key string) {
 		fmt.Println(i)
 	}
 
+}
+
+func init() {
+	options = NewOptions()
 }
