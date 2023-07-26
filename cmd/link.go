@@ -40,11 +40,12 @@ to quickly create a Cobra application.`,
 		link, err := kourai.LinkFromFiles(
 			kourai.WithDestination(dest),
 			kourai.WithSources(args),
-			kourai.WithIncludedFileExtensions(extensions),
-			kourai.WithExcludedPatterns(excludes),
+			kourai.WithFileExtensions(extensions),
+			kourai.WithFileModificationFilter(after, before),
+			kourai.WithExcludePatterns(excludes),
 			kourai.WithTMDBApiKey(key),
-			kourai.WithTitleCaserDisabled(skipTitleCaser),
-			kourai.WithExcludedTypes(excludeMovies, excludeTv),
+			kourai.WithoutTitleCaseModification(skipTitleCaser),
+			kourai.WithExcludeTypes(excludeMovies, excludeTv),
 		)
 		if err != nil {
 			fmt.Println("encountered error:", err)

@@ -11,12 +11,17 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/agnivade/levenshtein"
 	"github.com/ryanbradynd05/go-tmdb"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
+
+// TODO: directories are being returned as links. may need to return nil from walk func
+// filtering before works, but results are empty because the mtime on the root folder
+// is newer
 
 var (
 	episodeExpr  = regexp.MustCompile(`(?i)(s\d+)(e\d+)-?(e\d+)*`)
@@ -65,7 +70,7 @@ func NewOptions() *Options {
 
 type Option func(*Options)
 
-func WithIncludedFileExtensions(exts []string) Option {
+func WithFileExtensions(exts []string) Option {
 	exprs := []string{}
 	for _, e := range exts {
 		exprs = append(exprs, fmt.Sprintf(`(?i)\.%s$`, e))
@@ -75,7 +80,7 @@ func WithIncludedFileExtensions(exts []string) Option {
 	}
 }
 
-func WithExcludedPatterns(patterns []string) Option {
+func WithExcludePatterns(patterns []string) Option {
 	return func(o *Options) {
 		o.fileFilters = append(o.fileFilters, NewRegexpFilter([]string{}, patterns))
 	}
@@ -90,7 +95,7 @@ func WithTMDBApiKey(k string) Option {
 	}
 }
 
-func WithTitleCaserDisabled(disabled bool) Option {
+func WithoutTitleCaseModification(disabled bool) Option {
 	return func(o *Options) {
 		o.SkipTitleCaser = disabled
 	}
@@ -108,7 +113,7 @@ func WithSources(sources []string) Option {
 	}
 }
 
-func WithExcludedTypes(movies bool, tv bool) Option {
+func WithExcludeTypes(movies bool, tv bool) Option {
 	return func(o *Options) {
 		if movies {
 			o.excludeTypes = append(o.excludeTypes, Movie)
@@ -116,6 +121,12 @@ func WithExcludedTypes(movies bool, tv bool) Option {
 		if tv {
 			o.excludeTypes = append(o.excludeTypes, TV)
 		}
+	}
+}
+
+func WithFileModificationFilter(after, before *time.Time) Option {
+	return func(o *Options) {
+		o.fileFilters = append(o.fileFilters, fileMTimeFilter{after, before})
 	}
 }
 
@@ -523,6 +534,27 @@ func makeTitle(s string) string {
 	} else {
 		return title.String(t)
 	}
+}
+
+type fileMTimeFilter struct {
+	after  *time.Time
+	before *time.Time
+}
+
+func (f fileMTimeFilter) exclude(info fs.FileInfo) bool {
+	var a bool
+	var b bool
+	if f.after != nil {
+		a = !info.ModTime().After(*f.after)
+	}
+	if f.before != nil {
+		b = !info.ModTime().Before(*f.before)
+	}
+	return a || b
+}
+
+func (f fileMTimeFilter) include(info fs.FileInfo) bool {
+	return true
 }
 
 type RegexpFilter struct {

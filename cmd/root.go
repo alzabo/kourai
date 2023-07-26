@@ -4,8 +4,10 @@ Copyright © 2023 Ryan White
 package cmd
 
 import (
+	goflag "flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -16,6 +18,8 @@ var (
 	extensions        []string
 	extensionsDefault []string = []string{"avi", "mkv", "mp4"}
 	excludes          []string
+	before            *time.Time
+	after             *time.Time
 	excludeTv         bool
 	excludeMovies     bool
 )
@@ -44,21 +48,59 @@ func Execute() {
 	}
 }
 
+func parseTime(v string) (time.Time, error) {
+	var t time.Time
+	var err error
+
+	formats := []string{"2006-01-02", "1/2", "1-2", "01/02", "01/02"}
+
+	for _, f := range formats {
+		t, err = time.Parse(f, v)
+		if err != nil {
+			continue
+		}
+		if t.Year() == 0 {
+			t = t.AddDate(time.Now().Year(), 0, 0)
+		}
+		break
+	}
+	return t, err
+}
+
 func init() {
 	cobra.OnInitialize(initConfig)
+
+	goflag.Func("before", "Only consider files modified before the given date", func(d string) error {
+		t, err := parseTime(d)
+		if err != nil {
+			return err
+		}
+		before = &t
+		return nil
+	})
+
+	goflag.Func("after", "Only consider files modified after the given date", func(d string) error {
+		t, err := parseTime(d)
+		if err != nil {
+			return err
+		}
+		after = &t
+		return nil
+	})
+
+	// Add goflags to Cobra command
+	rootCmd.PersistentFlags().AddGoFlagSet(goflag.CommandLine)
 
 	// Here you will define your flags and configuration settings.
 	// Cobra supports persistent flags, which, if defined here,
 	// will be global for your application.
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.kourai.yaml)")
-
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
 	rootCmd.PersistentFlags().StringSliceVarP(&extensions, "extensions", "e", extensionsDefault, "File extensions to consider (case-insensitive)")
 	rootCmd.PersistentFlags().StringSliceVarP(&excludes, "exclude", "x", []string{}, "Patterns to Exclude")
+	rootCmd.PersistentFlags().StringP("exclude-before", "a", "", "Exclude files older than the specified date")
+	rootCmd.PersistentFlags().StringP("exclude-after", "b", "", "Exclude files newer than the specified date")
 	rootCmd.PersistentFlags().String("api-key", "", "TMDB API Key")
-
 	rootCmd.PersistentFlags().BoolVar(&excludeTv, "no-tv", false, "Exclude TV files and results")
 	rootCmd.PersistentFlags().BoolVar(&excludeMovies, "no-movies", false, "Exclude Movie files and results")
 }
