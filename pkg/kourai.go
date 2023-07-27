@@ -57,7 +57,7 @@ func (o *Options) SetOptions(opts ...Option) {
 
 func NewOptions() *Options {
 	o := &Options{}
-	defaultFilter := NewRegexpFilter([]string{}, []string{`(?i)\bsample\b`})
+	defaultFilter := NewRegexpFilter([]string{`(?i)\bsample\b`})
 	o.fileFilters = append(o.fileFilters, defaultFilter)
 	return o
 }
@@ -65,18 +65,14 @@ func NewOptions() *Options {
 type Option func(*Options)
 
 func WithFileExtensions(exts []string) Option {
-	exprs := []string{}
-	for _, e := range exts {
-		exprs = append(exprs, fmt.Sprintf(`(?i)\.%s$`, e))
-	}
 	return func(o *Options) {
-		o.fileFilters = append(o.fileFilters, NewRegexpFilter(exprs, []string{}))
+		o.fileFilters = append(o.fileFilters, newFileExtensionFilter(exts))
 	}
 }
 
 func WithExcludePatterns(patterns []string) Option {
 	return func(o *Options) {
-		o.fileFilters = append(o.fileFilters, NewRegexpFilter([]string{}, patterns))
+		o.fileFilters = append(o.fileFilters, NewRegexpFilter(patterns))
 	}
 }
 
@@ -556,12 +552,28 @@ func (f fileMTimeFilter) exclude(info fs.FileInfo) bool {
 	return a || b
 }
 
-func (f fileMTimeFilter) include(info fs.FileInfo) bool {
-	return true
+type fileExtensionFilter struct {
+	extensions map[string]bool
+}
+
+// files whose extensions are not contained in the fileExtensionFilter
+// are excluded
+func (f fileExtensionFilter) exclude(info fs.FileInfo) bool {
+	split := strings.Split(info.Name(), ".")
+	ext := strings.ToLower(split[len(split)-1])
+	_, ok := f.extensions[ext]
+	return !ok
+}
+
+func newFileExtensionFilter(extensions []string) fileExtensionFilter {
+	f := fileExtensionFilter{map[string]bool{}}
+	for _, ext := range extensions {
+		f.extensions[strings.ToLower(ext)] = true
+	}
+	return f
 }
 
 type RegexpFilter struct {
-	includes []*regexp.Regexp
 	excludes []*regexp.Regexp
 }
 
@@ -575,23 +587,8 @@ func (f RegexpFilter) exclude(info fs.FileInfo) bool {
 	return false
 }
 
-func (f RegexpFilter) include(info fs.FileInfo) bool {
-	if len(f.includes) == 0 {
-		return true
-	}
-	for _, e := range f.includes {
-		if e.MatchString(info.Name()) {
-			return true
-		}
-	}
-	return false
-}
-
-func NewRegexpFilter(includes []string, excludes []string) RegexpFilter {
+func NewRegexpFilter(excludes []string) RegexpFilter {
 	f := RegexpFilter{}
-	for _, p := range includes {
-		f.includes = append(f.includes, regexp.MustCompile(p))
-	}
 	for _, p := range excludes {
 		f.excludes = append(f.excludes, regexp.MustCompile(p))
 	}
@@ -600,7 +597,6 @@ func NewRegexpFilter(includes []string, excludes []string) RegexpFilter {
 
 type fileFilter interface {
 	exclude(fs.FileInfo) bool
-	include(fs.FileInfo) bool
 }
 
 func findFiles(root string, filters ...fileFilter) ([]Media, error) {
@@ -619,7 +615,7 @@ func findFiles(root string, filters ...fileFilter) ([]Media, error) {
 				}
 				return nil
 			} else {
-				if filter.exclude(info) || !filter.include(info) {
+				if filter.exclude(info) {
 					return nil
 				}
 			}
@@ -634,12 +630,6 @@ func findFiles(root string, filters ...fileFilter) ([]Media, error) {
 	return media, err
 }
 
-// NewOptions/NewConfig -> ...Option -> Options or Config
-// file filters
-// media filters?
-// ...
-
-// func LinkFromFiles(...Optionf []string, excludes Excludes, dest string, opts Options, options ...Opts) ([]Link, error) {
 func LinkFromFiles(optionConfig ...Option) ([]Link, error) {
 	options.SetOptions(optionConfig...)
 	links := []Link{}
