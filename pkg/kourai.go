@@ -46,7 +46,7 @@ type Options struct {
 	fileFilters    []fileFilter
 	sources        []string
 	dest           string
-	excludeTypes   []int
+	excludeTypes   map[int]bool
 }
 
 func (o *Options) SetOptions(opts ...Option) {
@@ -56,9 +56,11 @@ func (o *Options) SetOptions(opts ...Option) {
 }
 
 func NewOptions() *Options {
-	o := &Options{}
 	defaultFilter := NewRegexpFilter([]string{`(?i)\bsample\b`})
+
+	o := &Options{}
 	o.fileFilters = append(o.fileFilters, defaultFilter)
+	o.excludeTypes = map[int]bool{}
 	return o
 }
 
@@ -106,10 +108,10 @@ func WithSources(sources []string) Option {
 func WithExcludeTypes(movies bool, tv bool) Option {
 	return func(o *Options) {
 		if movies {
-			o.excludeTypes = append(o.excludeTypes, Movie)
+			o.excludeTypes[Movie] = true
 		}
 		if tv {
-			o.excludeTypes = append(o.excludeTypes, TV)
+			o.excludeTypes[TV] = true
 		}
 	}
 }
@@ -642,10 +644,10 @@ func LinkFromFiles(optionConfig ...Option) ([]Link, error) {
 		}
 
 		for _, m := range media {
-			for _, t := range options.excludeTypes {
-				if m.Type == t {
-					continue
-				}
+			// type exclusion may be done before an expensive TMDBLookup call
+			// because the required properties are already set
+			if _, ok := options.excludeTypes[m.Type]; ok {
+				continue
 			}
 			if options.TMDBClient != nil {
 				m.TMDBLookup(options.TMDBClient)
