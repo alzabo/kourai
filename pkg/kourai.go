@@ -23,13 +23,8 @@ import (
 // is newer
 
 var (
-	episodeExpr  = regexp.MustCompile(`(?i)(s\d+)(e\d+)-?(e\d+)*`)
-	sentinelExpr = regexp.MustCompile(`(?i)\b(\d{3,4}[ip]|limited|unrated|web(-dl|rip)|bluray|10bit|pal|re(rip|pack)|dvdrip|a\.k\.a\.?|aka)\b`)
-	seasonExpr   = regexp.MustCompile(`(?i)s(\d+)`)
-	dateExpr     = regexp.MustCompile(`(\b(?:19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
-	title        = cases.Title(language.AmericanEnglish, cases.NoLower)
-	cache        = lookupCache{}
-	options      *Options
+	cache   lookupCache
+	options *Options
 )
 
 const (
@@ -442,6 +437,13 @@ func (l Link) Create() {
 	}
 }
 
+var (
+	episodeExpr  = regexp.MustCompile(`(?i)(s\d+)(e\d+)-?(e\d+)*`)
+	sentinelExpr = regexp.MustCompile(`(?i)\b(\d{3,4}[ip]|limited|unrated|web(-dl|rip)|bluray|10bit|pal|re(rip|pack)|dvdrip|a\.k\.a\.?|aka)\b`)
+	seasonExpr   = regexp.MustCompile(`(?i)s(\d+)`)
+	dateExpr     = regexp.MustCompile(`(\b(?:19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
+)
+
 // func NewLinks(Option...) []Link
 func NewMedia(p string) Media {
 	m := Media{}
@@ -525,6 +527,8 @@ func NewMedia(p string) Media {
 	return m
 }
 
+var title = cases.Title(language.AmericanEnglish, cases.NoLower)
+
 // Normalize a title
 func makeTitle(s string) string {
 	t := strings.Trim(strings.ReplaceAll(s, ".", " "), "_- ")
@@ -607,11 +611,10 @@ func findFiles(root string, filters ...fileFilter) ([]Media, error) {
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		info, _ := d.Info()
 		for _, filter := range filters {
-			// Directories are always included unless they match an exclusion filter
 			if d.IsDir() {
+				// If a directory matches an exclude filter, skip its children too
 				if filter.exclude(info) {
 					// TODO: debug logging
-					// fmt.Println("skipping", path)
 					return fs.SkipDir
 				}
 				return nil
@@ -697,4 +700,5 @@ func Search(f string, key string) {
 
 func init() {
 	options = NewOptions()
+	cache = lookupCache{}
 }
