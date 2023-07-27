@@ -22,6 +22,7 @@ var (
 	after             *time.Time
 	excludeTv         bool
 	excludeMovies     bool
+	excludeCountries  []string
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -98,8 +99,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.kourai.yaml)")
 	rootCmd.PersistentFlags().StringSliceVarP(&extensions, "extensions", "e", extensionsDefault, "File extensions to consider (case-insensitive)")
 	rootCmd.PersistentFlags().StringSliceVarP(&excludes, "exclude", "x", []string{}, "Patterns to Exclude")
-	rootCmd.PersistentFlags().StringP("exclude-before", "a", "", "Exclude files older than the specified date")
-	rootCmd.PersistentFlags().StringP("exclude-after", "b", "", "Exclude files newer than the specified date")
+	rootCmd.PersistentFlags().StringSliceVar(&excludeCountries, "exclude-countries", []string{}, "Origin countries to Exclude")
 	rootCmd.PersistentFlags().String("api-key", "", "TMDB API Key")
 	rootCmd.PersistentFlags().BoolVar(&excludeTv, "no-tv", false, "Exclude TV files and results")
 	rootCmd.PersistentFlags().BoolVar(&excludeMovies, "no-movies", false, "Exclude Movie files and results")

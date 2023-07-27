@@ -36,14 +36,16 @@ const (
 type lookupCache map[string]lookupItems
 
 type lookupItems struct {
-	title string
-	id    int
+	title     string
+	id        int
+	countries []string
 }
 
 type Options struct {
 	SkipTitleCaser bool
 	TMDBClient     *tmdb.TMDb
 	fileFilters    []fileFilter
+	mediaFilters   []mediaFilter
 	sources        []string
 	dest           string
 	excludeTypes   map[int]bool
@@ -122,6 +124,16 @@ func WithFileModificationFilter(after, before *time.Time) Option {
 	}
 }
 
+func WithCountryFilter(codes []string) Option {
+	f := countryFilter{map[string]bool{}}
+	for _, code := range codes {
+		f.countries[strings.ToLower(code)] = true
+	}
+	return func(o *Options) {
+		o.mediaFilters = append(o.mediaFilters, f)
+	}
+}
+
 type Episode struct {
 	ID      string
 	Title   string
@@ -134,6 +146,7 @@ type Media struct {
 	Type      int
 	Date      string
 	Title     string
+	Countries []string
 	TvEpisode Episode
 	tmdbID    int
 }
@@ -244,6 +257,7 @@ func lookupTV(c *tmdb.TMDb, m *Media) error {
 			e := lookupItems{
 				res.Results[0].Name,
 				res.Results[0].ID,
+				res.Results[0].OriginCountry,
 			}
 			cache[m.Title] = e
 			m.Title = e.title
@@ -258,10 +272,12 @@ func lookupTV(c *tmdb.TMDb, m *Media) error {
 			e := lookupItems{
 				names[i],
 				res.Results[i].ID,
+				res.Results[i].OriginCountry,
 			}
 			cache[m.Title] = e
 			m.Title = e.title
 			m.tmdbID = e.id
+			m.Countries = e.countries
 			return nil
 		}
 	}
@@ -601,6 +617,23 @@ type fileFilter interface {
 	exclude(fs.FileInfo) bool
 }
 
+type countryFilter struct {
+	countries map[string]bool
+}
+
+func (f countryFilter) exclude(m Media) bool {
+	for _, country := range m.Countries {
+		if _, ok := f.countries[country]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+type mediaFilter interface {
+	exclude(Media) bool
+}
+
 func findFiles(root string, filters ...fileFilter) ([]Media, error) {
 	media := []Media{}
 	if _, err := os.Stat(root); err != nil {
@@ -651,6 +684,11 @@ func LinkFromFiles(optionConfig ...Option) ([]Link, error) {
 			}
 			if options.TMDBClient != nil {
 				m.TMDBLookup(options.TMDBClient)
+			}
+			for _, filter := range options.mediaFilters {
+				if filter.exclude(m) {
+					continue
+				}
 			}
 			target := m.target(options.dest)
 			links = append(links, Link{Src: m.Path, Target: target})

@@ -46,6 +46,7 @@ to quickly create a Cobra application.`,
 			kourai.WithTMDBApiKey(key),
 			kourai.WithoutTitleCaseModification(skipTitleCaser),
 			kourai.WithExcludeTypes(excludeMovies, excludeTv),
+			kourai.WithCountryFilter(excludeCountries),
 		)
 		if err != nil {
 			fmt.Println("encountered error:", err)
