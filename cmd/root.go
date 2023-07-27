@@ -48,7 +48,7 @@ func Execute() {
 	}
 }
 
-func parseTime(v string) (time.Time, error) {
+func timeFlagHelper(v string) (time.Time, error) {
 	var t time.Time
 	var err error
 
@@ -71,7 +71,7 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	goflag.Func("before", "Only consider files modified before the given date", func(d string) error {
-		t, err := parseTime(d)
+		t, err := timeFlagHelper(d)
 		if err != nil {
 			return err
 		}
@@ -80,7 +80,7 @@ func init() {
 	})
 
 	goflag.Func("after", "Only consider files modified after the given date", func(d string) error {
-		t, err := parseTime(d)
+		t, err := timeFlagHelper(d)
 		if err != nil {
 			return err
 		}

@@ -19,8 +19,7 @@ import (
 	"golang.org/x/text/language"
 )
 
-// TODO: directories are being returned as links. may need to return nil from walk func
-// filtering before works, but results are empty because the mtime on the root folder
+// TODO: filtering before works, but results are empty because the mtime on the root folder
 // is newer
 
 var (
@@ -615,6 +614,7 @@ func findFiles(root string, filters ...fileFilter) ([]Media, error) {
 					// fmt.Println("skipping", path)
 					return fs.SkipDir
 				}
+				return nil
 			} else {
 				if filter.exclude(info) || !filter.include(info) {
 					return nil
