@@ -577,6 +577,9 @@ type fileExtensionFilter struct {
 // files whose extensions are not contained in the fileExtensionFilter
 // are excluded
 func (f fileExtensionFilter) exclude(info fs.FileInfo) bool {
+	if info.IsDir() {
+		return false
+	}
 	split := strings.Split(info.Name(), ".")
 	ext := strings.ToLower(split[len(split)-1])
 	_, ok := f.extensions[ext]
@@ -597,7 +600,6 @@ type RegexpFilter struct {
 
 func (f RegexpFilter) exclude(info fs.FileInfo) bool {
 	for _, e := range f.excludes {
-		e := e
 		if e.MatchString(info.Name()) {
 			return true
 		}
@@ -648,12 +650,14 @@ func findFiles(root string, filters ...fileFilter) ([]Media, error) {
 					// TODO: debug logging
 					return fs.SkipDir
 				}
-				return nil
 			} else {
 				if filter.exclude(info) {
 					return nil
 				}
 			}
+		}
+		if d.IsDir() {
+			return nil
 		}
 		m := NewMedia(path)
 		if m.Title != "" {
