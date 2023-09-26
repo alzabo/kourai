@@ -4,6 +4,7 @@ go 1.21
 
 require (
 	github.com/agnivade/levenshtein v1.1.1
+	github.com/google/go-cmp v0.5.9
 	github.com/ryanbradynd05/go-tmdb v0.0.0-20220721194547-2ab6191c6273
 	github.com/spf13/cobra v1.6.1
 	github.com/spf13/viper v1.14.0
