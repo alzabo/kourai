@@ -4,12 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -541,15 +543,13 @@ func NewMedia(p string) Media {
 	return m
 }
 
-var title = cases.Title(language.AmericanEnglish, cases.NoLower)
-
 // Normalize a title
 func makeTitle(s string) string {
 	t := strings.Trim(strings.ReplaceAll(s, ".", " "), "_- ")
 	if options.SkipTitleCaser {
 		return t
 	} else {
-		return title.String(t)
+		return cases.Title(language.AmericanEnglish, cases.NoLower).String(t)
 	}
 }
 
@@ -601,6 +601,7 @@ type RegexpFilter struct {
 func (f RegexpFilter) exclude(info fs.FileInfo) bool {
 	for _, e := range f.excludes {
 		if e.MatchString(info.Name()) {
+			//fmt.Println("skipping", info.Name(), "which matched", e)
 			return true
 		}
 	}
@@ -636,37 +637,58 @@ type mediaFilter interface {
 	exclude(Media) bool
 }
 
-func findFiles(root string, filters ...fileFilter) ([]Media, error) {
-	media := []Media{}
+func findFiles(root string, filters ...fileFilter) (<-chan Media, <-chan error) {
+	c := make(chan Media)
+	errc := make(chan error, 1)
 	if _, err := os.Stat(root); err != nil {
-		return media, fmt.Errorf("failed to stat %s with error %s", root, err)
+		close(c)
+		errc <- fmt.Errorf("failed to stat %s with error %s", root, err)
+		return c, errc
 	}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		info, _ := d.Info()
-		for _, filter := range filters {
-			if d.IsDir() {
-				// If a directory matches an exclude filter, skip its children too
-				if filter.exclude(info) {
-					// TODO: debug logging
-					return fs.SkipDir
-				}
-			} else {
-				if filter.exclude(info) {
+	go func() {
+		var wg sync.WaitGroup
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			info, err := d.Info()
+			if err != nil {
+				return nil
+			}
+			for _, filter := range filters {
+				if d.IsDir() {
+					if filter.exclude(info) {
+						// TODO: debug logging
+						slog.Debug("skipping directory", info)
+						//fmt.Println("skipping directory", path, "filter", filter)
+						// If a directory matches an exclude filter, skip its children too
+						return fs.SkipDir
+					}
+				} else if !d.Type().IsRegular() { // TODO: Handle symlinks?
 					return nil
+				} else {
+					if filter.exclude(info) {
+						return nil
+					}
 				}
 			}
-		}
-		if d.IsDir() {
+			if d.IsDir() {
+				return nil
+			}
+			wg.Add(1)
+			go func() {
+				m := NewMedia(path)
+				if m.Title != "" {
+					c <- m
+				}
+				wg.Done()
+			}()
 			return nil
-		}
-		m := NewMedia(path)
-		if m.Title != "" {
-			media = append(media, m)
-			//fmt.Println(m.Type, m.ParsedTitle, m.Date)
-		}
-		return nil
-	})
-	return media, err
+		})
+		go func() {
+			wg.Wait()
+			close(c)
+		}()
+		errc <- err
+	}()
+	return c, errc
 }
 
 func LinkFromFiles(optionConfig ...Option) ([]Link, error) {
@@ -674,13 +696,13 @@ func LinkFromFiles(optionConfig ...Option) ([]Link, error) {
 	links := []Link{}
 
 	for _, src := range options.sources {
-		media, err := findFiles(src, options.fileFilters...)
-		if err != nil {
+		media, errc := findFiles(src, options.fileFilters...)
+		if err := <-errc; err != nil {
 			fmt.Println(err)
 			continue
 		}
 
-		for _, m := range media {
+		for m := range media {
 			// type exclusion may be done before an expensive TMDBLookup call
 			// because the required properties are already set
 			if _, ok := options.excludeTypes[m.Type]; ok {

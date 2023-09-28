@@ -64,9 +64,8 @@ func TestFindFiles(t *testing.T) {
 		// the order in which the file was visited.
 		got := sort.StringSlice{}
 		media, _ := findFiles(root, NewRegexpFilter(i.excludes))
-		for _, m := range media {
+		for m := range media {
 			// strip tmpdir prefix off of each path
-			m := m
 			got = append(got, m.Path[len(root)+1:len(m.Path)])
 		}
 		got.Sort()
