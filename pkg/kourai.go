@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +13,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	tmdb_ "github.com/alzabo/kourai/tmdb"
 
 	"github.com/agnivade/levenshtein"
 	"github.com/ryanbradynd05/go-tmdb"
@@ -25,7 +26,7 @@ import (
 // is newer
 
 var (
-	cache   lookupCache
+	cache   *tmdbCache
 	options *Options
 )
 
@@ -35,7 +36,30 @@ const (
 	TV      = iota
 )
 
-type lookupCache map[string]lookupItems
+func newTMDBCache() *tmdbCache {
+	c := tmdbCache{
+		internal: map[string]lookupItems{},
+	}
+	return &c
+}
+
+type tmdbCache struct {
+	mutex    sync.RWMutex
+	internal map[string]lookupItems
+}
+
+func (c *tmdbCache) Store(k string, v lookupItems) {
+	c.mutex.Lock()
+	c.internal[k] = v
+	c.mutex.Unlock()
+}
+
+func (c *tmdbCache) Load(k string) (lookupItems, bool) {
+	c.mutex.RLock()
+	v, ok := c.internal[k]
+	c.mutex.RUnlock()
+	return v, ok
+}
 
 type lookupItems struct {
 	title     string
@@ -46,6 +70,7 @@ type lookupItems struct {
 type Options struct {
 	SkipTitleCaser bool
 	TMDBClient     *tmdb.TMDb
+	TMDBC2         *tmdb_.TMDB
 	fileFilters    []fileFilter
 	mediaFilters   []mediaFilter
 	sources        []string
@@ -88,6 +113,7 @@ func WithTMDBApiKey(k string) Option {
 			return
 		}
 		o.TMDBClient = tmdb.Init(tmdb.Config{APIKey: k})
+		o.TMDBC2 = tmdb_.New(k)
 	}
 }
 
@@ -158,7 +184,12 @@ func (m *Media) TMDBLookup(c *tmdb.TMDb) {
 		lookupTV(c, m)
 		lookupEpisode(c, m)
 	} else {
-		lookupMovie(c, m)
+		res, err := options.TMDBC2.SearchMovie(m.Title, map[string]string{"year": m.Date})
+		if err != nil {
+			fmt.Println("failed to look up movie:", err)
+			return
+		}
+		m.Title = res.Title
 	}
 }
 
@@ -242,46 +273,46 @@ func MatchMovieSearch(m *Media, res *tmdb.MovieSearchResults) (tmdb.MovieShort, 
 func lookupTV(c *tmdb.TMDb, m *Media) error {
 	options := map[string]string{}
 
-	if l, ok := cache[m.Title]; ok {
-		m.Title = l.title
-		m.tmdbID = l.id
+	if cached, ok := cache.Load(m.Title); ok {
+		m.Title = cached.title
+		m.tmdbID = cached.id
 		return nil
-	} else {
-		res, err := c.SearchTv(m.Title, options)
-		if err != nil {
-			return fmt.Errorf("failed to look up %v", m)
-		}
+	}
 
-		switch len(res.Results) {
-		case 0:
-			return fmt.Errorf("no results found in search for %v", m)
-		case 1:
-			e := lookupItems{
-				res.Results[0].Name,
-				res.Results[0].ID,
-				res.Results[0].OriginCountry,
-			}
-			cache[m.Title] = e
-			m.Title = e.title
-			m.tmdbID = e.id
-			return nil
-		default:
-			names := make([]string, len(res.Results))
-			for i, j := range res.Results {
-				names[i] = j.Name
-			}
-			i := BestMatchIndex(m.Title, names)
-			e := lookupItems{
-				names[i],
-				res.Results[i].ID,
-				res.Results[i].OriginCountry,
-			}
-			cache[m.Title] = e
-			m.Title = e.title
-			m.tmdbID = e.id
-			m.Countries = e.countries
-			return nil
+	res, err := c.SearchTv(m.Title, options)
+	if err != nil {
+		return fmt.Errorf("failed to look up %v", m)
+	}
+
+	switch len(res.Results) {
+	case 0:
+		return fmt.Errorf("no results found in search for %v", m)
+	case 1:
+		found := lookupItems{
+			res.Results[0].Name,
+			res.Results[0].ID,
+			res.Results[0].OriginCountry,
 		}
+		cache.Store(m.Title, found)
+		m.Title = found.title
+		m.tmdbID = found.id
+		return nil
+	default:
+		names := make([]string, len(res.Results))
+		for i, j := range res.Results {
+			names[i] = j.Name
+		}
+		idx := BestMatchIndex(m.Title, names)
+		found := lookupItems{
+			names[idx],
+			res.Results[idx].ID,
+			res.Results[idx].OriginCountry,
+		}
+		cache.Store(m.Title, found)
+		m.Title = found.title
+		m.tmdbID = found.id
+		m.Countries = found.countries
+		return nil
 	}
 }
 
@@ -648,37 +679,43 @@ func findFiles(root string, filters ...fileFilter) (<-chan Media, <-chan error) 
 	go func() {
 		var wg sync.WaitGroup
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			info, err := d.Info()
-			if err != nil {
+			var info fs.FileInfo
+			if i, err := d.Info(); err != nil {
 				return nil
+			} else {
+				info = i
 			}
-			for _, filter := range filters {
-				if d.IsDir() {
+
+			// If a directory matches an exclude filter, return to the
+			// WalkDirFunc to skip its children too
+			if d.IsDir() {
+				for _, filter := range filters {
 					if filter.exclude(info) {
 						// TODO: debug logging
-						slog.Debug("skipping directory", info)
+						//slog.Debug("skipping directory", info)
 						//fmt.Println("skipping directory", path, "filter", filter)
-						// If a directory matches an exclude filter, skip its children too
 						return fs.SkipDir
 					}
-				} else if !d.Type().IsRegular() { // TODO: Handle symlinks?
-					return nil
-				} else {
-					if filter.exclude(info) {
-						return nil
-					}
 				}
-			}
-			if d.IsDir() {
 				return nil
 			}
+
+			// Non-directory files can be filtered concurrently
 			wg.Add(1)
 			go func() {
+				defer wg.Done()
+				if !d.Type().IsRegular() { // TODO: Handle symlinks?
+					return
+				}
+				for _, filter := range filters {
+					if filter.exclude(info) {
+						return
+					}
+				}
 				m := NewMedia(path)
 				if m.Title != "" {
 					c <- m
 				}
-				wg.Done()
 			}()
 			return nil
 		})
@@ -691,36 +728,52 @@ func findFiles(root string, filters ...fileFilter) (<-chan Media, <-chan error) 
 	return c, errc
 }
 
-func LinkFromFiles(optionConfig ...Option) ([]Link, error) {
+// TODO: accept done channel
+func LinkFromFiles(optionConfig ...Option) (<-chan Link, <-chan error) {
 	options.SetOptions(optionConfig...)
-	links := []Link{}
+	linkc := make(chan Link)
+	errc := make(chan error, 1)
 
-	for _, src := range options.sources {
-		media, errc := findFiles(src, options.fileFilters...)
-		if err := <-errc; err != nil {
-			fmt.Println(err)
-			continue
-		}
+	go func() {
+		wg := sync.WaitGroup{}
 
-		for m := range media {
-			// type exclusion may be done before an expensive TMDBLookup call
-			// because the required properties are already set
-			if _, ok := options.excludeTypes[m.Type]; ok {
+		for _, src := range options.sources {
+			media, errc := findFiles(src, options.fileFilters...)
+			if err := <-errc; err != nil {
+				fmt.Println(err)
 				continue
 			}
-			if options.TMDBClient != nil {
-				m.TMDBLookup(options.TMDBClient)
+			for m := range media {
+				m := m
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					// type exclusion may be done before an expensive TMDBLookup call
+					// because the required properties are already set
+					if _, ok := options.excludeTypes[m.Type]; ok {
+						return
+					}
+					if options.TMDBClient != nil {
+						m.TMDBLookup(options.TMDBClient)
+						//fmt.Println("Looked up", m)
+					}
+					for _, filter := range options.mediaFilters {
+						if filter.exclude(m) {
+							return
+						}
+					}
+					target := m.target(options.dest)
+					linkc <- Link{Src: m.Path, Target: target}
+				}()
 			}
-			for _, filter := range options.mediaFilters {
-				if filter.exclude(m) {
-					continue
-				}
-			}
-			target := m.target(options.dest)
-			links = append(links, Link{Src: m.Path, Target: target})
 		}
-	}
-	return links, nil
+		go func() {
+			wg.Wait()
+			close(linkc)
+		}()
+	}()
+	errc <- nil
+	return linkc, errc
 }
 
 func Nlinks(d fs.DirEntry) (count uint64, err error) {
@@ -740,21 +793,20 @@ func Nlinks(d fs.DirEntry) (count uint64, err error) {
 	return
 }
 
-func Search(f string, key string) {
-	client := tmdb.Init(tmdb.Config{APIKey: key})
-	res, err := client.SearchTv(f, map[string]string{})
-	if err != nil {
+func Search(key string, f string, options map[string]string) {
+	client := tmdb_.New(key)
+	res, errc := client.SearchMovies(f, nil, options)
+	if err := <-errc; err != nil {
 		// log
 		fmt.Print(err)
 		return
 	}
-	for _, i := range res.Results {
-		fmt.Println(i)
+	for r := range res {
+		fmt.Printf("%s\t\t%s\n", r.Title, r.Overview)
 	}
-
 }
 
 func init() {
 	options = NewOptions()
-	cache = lookupCache{}
+	cache = newTMDBCache()
 }

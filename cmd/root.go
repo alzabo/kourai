@@ -95,7 +95,7 @@ func init() {
 	// Here you will define your flags and configuration settings.
 	// Cobra supports persistent flags, which, if defined here,
 	// will be global for your application.
-
+	rootCmd.PersistentFlags().String("cpuprofile", "", "Write CPU profile to file")
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.kourai.yaml)")
 	rootCmd.PersistentFlags().StringSliceVarP(&extensions, "extensions", "e", extensionsDefault, "File extensions to consider (case-insensitive)")
 	rootCmd.PersistentFlags().StringSliceVarP(&excludes, "exclude", "x", []string{}, "Patterns to Exclude")

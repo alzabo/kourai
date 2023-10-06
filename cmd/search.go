@@ -40,8 +40,14 @@ This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		k := cmd.Flags().Lookup("api-key").Value.String()
+		year := cmd.Flags().Lookup("year").Value.String()
+		options := map[string]string{}
+
+		if year != "" {
+			options["year"] = year
+		}
 		for _, i := range args {
-			kourai.Search(i, k)
+			kourai.Search(k, i, options)
 			fmt.Println("search called", i)
 		}
 	},
@@ -55,6 +61,7 @@ func init() {
 	// Cobra supports Persistent Flags which will work for this command
 	// and all subcommands, e.g.:
 	// searchCmd.PersistentFlags().String("foo", "", "A help for foo")
+	searchCmd.PersistentFlags().String("year", "", "search including the given year")
 
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:

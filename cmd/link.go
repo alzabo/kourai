@@ -1,11 +1,13 @@
 /*
-Copyright © 2023 NAME HERE <EMAIL ADDRESS>
+Copyright © 2023 Ryan White
 */
 package cmd
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"runtime/pprof"
 
 	kourai "github.com/alzabo/kourai/pkg"
 	"github.com/spf13/cobra"
@@ -31,13 +33,23 @@ to quickly create a Cobra application.`,
 		key := cmd.Flags().Lookup("api-key").Value.String()
 		dest := cmd.Flags().Lookup("dest").Value.String()
 
+		cpuprofile := cmd.Flags().Lookup("cpuprofile").Value.String()
+		if cpuprofile != "" {
+			f, err := os.Create(cpuprofile)
+			if err != nil {
+				log.Fatal(err)
+			}
+			pprof.StartCPUProfile(f)
+			defer pprof.StopCPUProfile()
+		}
+
 		fmt.Println("dry-run", dryRun)
 
 		if len(args) == 0 {
 			args = srcsDefault
 		}
 
-		link, err := kourai.LinkFromFiles(
+		linkc, errc := kourai.LinkFromFiles(
 			kourai.WithDestination(dest),
 			kourai.WithSources(args),
 			kourai.WithFileExtensions(extensions),
@@ -48,18 +60,24 @@ to quickly create a Cobra application.`,
 			kourai.WithExcludeTypes(excludeMovies, excludeTv),
 			kourai.WithCountryFilter(excludeCountries),
 		)
-		if err != nil {
+		if err := <-errc; err != nil {
 			fmt.Println("encountered error:", err)
 			os.Exit(1)
 		}
-
-		for _, l := range link {
+		//wg := sync.WaitGroup{}
+		for l := range linkc {
+			l := l
+			//	wg.Add(1)
+			//	go func() {
 			if dryRun {
 				fmt.Printf("%v\t%v\n", l.Src, l.Target)
 			} else {
 				l.Create()
 			}
+			//wg.Done()
+			//	}()
 		}
+		//wg.Wait()
 	},
 }
 
