@@ -576,7 +576,8 @@ func NewMedia(p string) Media {
 
 // Normalize a title
 func makeTitle(s string) string {
-	t := strings.Trim(strings.ReplaceAll(s, ".", " "), "_- ")
+	t := strings.ReplaceAll(s, ".", " ")
+	t = strings.Trim(strings.ReplaceAll(t, "_", " "), "- ")
 	if options.SkipTitleCaser {
 		return t
 	} else {
