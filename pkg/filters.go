@@ -78,15 +78,15 @@ type countryFilter struct {
 	countries map[string]bool
 }
 
-func (f countryFilter) exclude(m Media) bool {
-	for _, country := range m.Countries {
-		if _, ok := f.countries[country]; ok {
-			return true
-		}
-	}
+func (f countryFilter) exclude(l Linkable) bool {
+	//for _, country := range m.Countries {
+	//	if _, ok := f.countries[country]; ok {
+	//		return true
+	//	}
+	//}
 	return false
 }
 
 type mediaFilter interface {
-	exclude(Media) bool
+	exclude(Linkable) bool
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -26,14 +27,12 @@ import (
 // is newer
 
 var (
-	cache   *tmdbCache
-	options *Options
-)
-
-const (
-	Movie   = iota
-	Unknown = iota
-	TV      = iota
+	cache        *tmdbCache
+	options      *Options
+	episodeExpr  = regexp.MustCompile(`(?i)(s\d+)(e\d+)-?(e\d+)*`)
+	sentinelExpr = regexp.MustCompile(`(?i)\b(\d{3,4}[ip]|limited|unrated|web(-dl|rip)|bluray|10bit|pal|re(rip|pack)|dvdrip|a\.k\.a\.?|aka)\b`)
+	seasonExpr   = regexp.MustCompile(`(?i)s(\d+)`)
+	dateExpr     = regexp.MustCompile(`(\b(19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
 )
 
 func newTMDBCache() *tmdbCache {
@@ -75,7 +74,7 @@ type Options struct {
 	mediaFilters   []mediaFilter
 	sources        []string
 	dest           string
-	excludeTypes   map[int]bool
+	excludeTypes   map[string]struct{}
 }
 
 func (o *Options) SetOptions(opts ...Option) {
@@ -89,7 +88,7 @@ func NewOptions() *Options {
 
 	o := &Options{}
 	o.fileFilters = append(o.fileFilters, defaultFilter)
-	o.excludeTypes = map[int]bool{}
+	o.excludeTypes = map[string]struct{}{}
 	return o
 }
 
@@ -138,10 +137,10 @@ func WithSources(sources []string) Option {
 func WithExcludeTypes(movies bool, tv bool) Option {
 	return func(o *Options) {
 		if movies {
-			o.excludeTypes[Movie] = true
+			o.excludeTypes["movie"] = struct{}{}
 		}
 		if tv {
-			o.excludeTypes[TV] = true
+			o.excludeTypes["episode"] = struct{}{}
 		}
 	}
 }
@@ -152,6 +151,7 @@ func WithFileModificationFilter(after, before *time.Time) Option {
 	}
 }
 
+// TODO: collect additional metadata when filters that require it are enabled.
 func WithCountryFilter(codes []string) Option {
 	f := countryFilter{map[string]bool{}}
 	for _, code := range codes {
@@ -162,241 +162,257 @@ func WithCountryFilter(codes []string) Option {
 	}
 }
 
-type Episode struct {
-	ID      string
-	Title   string
-	Season  int
-	Episode int
+type episode struct {
+	series  string
+	title   string
+	id      string
+	season  int
+	episode int
+	path    string
+	tmdbID  int
 }
 
-type Media struct {
-	Path      string
-	Type      int
-	Date      string
-	Title     string
-	Countries []string
-	TvEpisode Episode
-	tmdbID    int
+func (e *episode) Path() string {
+	return e.path
 }
 
-func (m *Media) TMDBLookup(c *tmdb.TMDb) {
-	if m.Type == TV {
-		lookupTV(c, m)
-		lookupEpisode(c, m)
+func (e *episode) Target() string {
+	var season string
+	if e.season == 0 {
+		season = "Specials"
 	} else {
-		res, err := options.TMDBC2.SearchMovie(m.Title, map[string]string{"year": m.Date})
+		season = fmt.Sprintf("Season %d", e.season)
+	}
+
+	// format episode ID the way plex likes, including episode IDs
+	var ep string
+	eps := strings.Split(strings.ToLower(e.id), "e")
+	// Handle edge case episodes where multiple episodes are combined in a
+	// single file, e.g. s01e01e02, rendering it as S01E01-E02
+	if len(eps) > 2 {
+		s := eps[0]
+		first := strings.Trim(eps[1], "-")
+		last := strings.Trim(eps[len(eps)-1], "-")
+		ep = strings.ToUpper(fmt.Sprintf("%se%s-e%s", s, first, last))
+	} else {
+		ep = strings.ToUpper(e.id)
+	}
+
+	var target string
+	dir := fmt.Sprintf("tv/%s/%s", e.series, season)
+	ext := filepath.Ext(e.path)
+	if e.title != "" {
+		target = fmt.Sprintf("%s/%s - %s - %s%s", dir, e.series, ep, e.title, ext)
+	} else {
+		target = fmt.Sprintf("%s/%s - %s%s", dir, e.series, ep, ext)
+	}
+	return target
+}
+
+func EpisodeFromPath(path string) (*episode, error) {
+	ep := &episode{path: path}
+	var errs []error
+
+	_, file := filepath.Split(path)
+	ext := filepath.Ext(file)
+	basename := file[:len(file)-len(ext)]
+
+	epLoc := episodeExpr.FindStringIndex(basename)
+	if epLoc == nil {
+		return ep, fmt.Errorf("could not determine episode ID given path \"%s\"; expression %v", basename, episodeExpr)
+	}
+	if epLoc[0] > 0 {
+		end := epLoc[0] - 1
+		ep.series = makeTitle(basename[:end])
+	}
+	ep.id = basename[epLoc[0]:epLoc[1]]
+
+	if s, err := strconv.Atoi(seasonExpr.FindString(ep.id)[1:]); err != nil {
+		errs = append(errs, fmt.Errorf("error parsing season number: %w", err))
+	} else {
+		ep.season = s
+	}
+
+	eps := strings.Split(strings.ToLower(ep.id), "e")
+	if e, err := strconv.Atoi(strings.TrimSuffix(eps[1], "-")); err != nil {
+		errs = append(errs, fmt.Errorf("error parsing episode number from %s with error %w", ep.id, err))
+	} else {
+		ep.episode = e
+	}
+
+	start := epLoc[1] + 1
+	end := len(basename)
+
+	dateLoc := dateExpr.FindStringIndex(basename)
+	if dateLoc != nil && dateLoc[0] < end && dateLoc[0]-1 > start {
+		end = dateLoc[0] - 1
+	}
+	sLoc := sentinelExpr.FindStringIndex(basename)
+	if sLoc != nil && sLoc[0] < end {
+		if sLoc[0] > start {
+			end = sLoc[0] - 1
+		}
+		// If the slice start is the same as the sentinel match, the
+		// title is probably not in the name
+		if sLoc[0] == start {
+			end = start
+		}
+	}
+	if start <= end {
+		n := basename[start:end]
+		ep.title = makeTitle(n)
+	}
+
+	return ep, errors.Join(errs...)
+}
+
+type movie struct {
+	title  string
+	year   string
+	path   string
+	tmdbID int
+}
+
+func (m *movie) Path() string {
+	return m.path
+}
+
+func (m *movie) Target() string {
+	_, file := filepath.Split(m.path)
+	var dir string
+	if m.year != "" {
+		dir = fmt.Sprintf("%s (%s)", m.title, m.year)
+	} else {
+		dir = m.title
+	}
+	return fmt.Sprintf("movies/%s/%s", dir, file)
+}
+
+func MovieFromPath(path string) (*movie, error) {
+	mov := &movie{path: path}
+	var errs []error
+
+	dir, file := filepath.Split(path)
+	dir = filepath.Base(dir)
+	ext := filepath.Ext(file)
+	basename := file[:len(file)-len(ext)]
+
+	for _, i := range [2]string{basename, dir} {
+		end := len(i)
+		dateLoc := dateExpr.FindStringIndex(i)
+		if dateLoc != nil {
+			mov.year = i[dateLoc[0]:dateLoc[1]]
+			if dateLoc[0] > 0 && dateLoc[0] < end {
+				end = dateLoc[0] - 1
+			}
+		}
+		sLoc := sentinelExpr.FindStringIndex(i)
+		if sLoc != nil && sLoc[0] > 0 && sLoc[0] < end {
+			end = sLoc[0] - 1
+		}
+		n := i[:end]
+		mov.title = makeTitle(n)
+		if mov.title != "" && mov.year != "" {
+			break
+		}
+	}
+	if mov.title == "" || mov.year == "" {
+		errs = append(errs, fmt.Errorf("failed to create movie from path \"%s\"; invalid movie %v", path, *mov))
+	}
+	return mov, errors.Join(errs...)
+}
+
+type Linkable interface {
+	Path() string
+	Target() string
+}
+
+func NewLinkable(path string) (Linkable, error) {
+	var l Linkable
+	var err error
+
+	if episodeExpr.FindString(path) != "" {
+		l, err = EpisodeFromPath(path)
+	} else {
+		l, err = MovieFromPath(path)
+	}
+	return l, err
+}
+
+func TMDBLookup(l Linkable, c *tmdb.TMDb) {
+	switch v := l.(type) {
+	case *episode:
+		lookupTV(c, v)
+		lookupEpisode(c, v)
+	case *movie:
+		res, err := options.TMDBC2.SearchMovie(v.title, map[string]string{"year": v.year})
 		if err != nil {
 			fmt.Println("failed to look up movie:", err)
 			return
 		}
-		m.Title = res.Title
+		v.title = res.Title
 	}
 }
 
-func (m Media) String() string {
-	return fmt.Sprintf("Path %v; Type %v; Date %v; ParsedTitle %v; Title %v; TvEpisode %v", m.Path, m.Type, m.Date, m.Title, m.Title, m.TvEpisode)
-}
-
-func (m Media) target(d string) string {
-	_, file := filepath.Split(m.Path)
-	path := ""
-	mediaDir := ""
-	if m.Date != "" {
-		mediaDir = fmt.Sprintf("%s (%s)", m.Title, m.Date)
-	} else {
-		mediaDir = m.Title
-	}
-
-	if m.Type != TV {
-		path = fmt.Sprintf("movies/%s/%s", mediaDir, file)
-	}
-	if m.Type == TV {
-		season := ""
-		if m.TvEpisode.Season == 0 {
-			season = "Specials"
-		}
-		if m.TvEpisode.Season > 0 {
-			season = fmt.Sprintf("Season %d", m.TvEpisode.Season)
-		}
-		if season == "" {
-			fmt.Println("failed to create tv path")
-			return ""
-		}
-
-		ep := strings.ToUpper(m.TvEpisode.ID)
-		// format episodes the way plex likes, including episode IDs
-		eps := strings.Split(strings.ToLower(m.TvEpisode.ID), "e")
-		if len(eps) > 2 {
-			ep = strings.ToUpper(fmt.Sprintf("%se%s-e%s", eps[0], strings.Trim(eps[1], "-"), strings.Trim(eps[len(eps)-1], "-")))
-		}
-
-		ext := filepath.Ext(file)
-
-		if m.TvEpisode.Title == "" {
-			path = fmt.Sprintf("tv/%s/%s/%s - %s%s", mediaDir, season, m.Title, ep, ext)
-		} else {
-			path = fmt.Sprintf("tv/%s/%s/%s - %s - %s%s", mediaDir, season, m.Title, ep, m.TvEpisode.Title, ext)
-		}
-	}
-
-	return filepath.Join(d, path)
-}
-
-func MatchMovieSearch(m *Media, res *tmdb.MovieSearchResults) (tmdb.MovieShort, error) {
-	switch len(res.Results) {
-	case 0:
-		return tmdb.MovieShort{}, fmt.Errorf("no results found in search for %v", m)
-	case 1:
-		return res.Results[0], nil
-	default:
-		match := []tmdb.MovieShort{}
-		for _, movie := range res.Results {
-			if DateMatch(m.Date, movie.ReleaseDate) {
-				match = append(match, movie)
-			}
-		}
-		switch len(match) {
-		case 0:
-			return tmdb.MovieShort{}, fmt.Errorf("failed to match %v in results %v", m, res)
-		case 1:
-			return match[0], nil
-		default:
-			names := make([]string, len(res.Results))
-			for i, j := range res.Results {
-				names[i] = j.Title
-			}
-			return res.Results[BestMatchIndex(m.Title, names)], nil
-		}
-	}
-}
-
-func lookupTV(c *tmdb.TMDb, m *Media) error {
+func lookupTV(c *tmdb.TMDb, e *episode) error {
 	options := map[string]string{}
 
-	if cached, ok := cache.Load(m.Title); ok {
-		m.Title = cached.title
-		m.tmdbID = cached.id
+	if cached, ok := cache.Load(e.title); ok {
+		e.title = cached.title
+		e.tmdbID = cached.id
 		return nil
 	}
 
-	res, err := c.SearchTv(m.Title, options)
+	// TODO: series search
+	res, err := c.SearchTv(e.series, options)
 	if err != nil {
-		return fmt.Errorf("failed to look up %v", m)
+		return fmt.Errorf("failed to look up %v", e)
 	}
 
 	switch len(res.Results) {
 	case 0:
-		return fmt.Errorf("no results found in search for %v", m)
+		return fmt.Errorf("no results found in search for %v", e)
 	case 1:
 		found := lookupItems{
 			res.Results[0].Name,
 			res.Results[0].ID,
 			res.Results[0].OriginCountry,
 		}
-		cache.Store(m.Title, found)
-		m.Title = found.title
-		m.tmdbID = found.id
+		cache.Store(e.series, found)
+		e.title = found.title
+		e.tmdbID = found.id
 		return nil
 	default:
 		names := make([]string, len(res.Results))
 		for i, j := range res.Results {
 			names[i] = j.Name
 		}
-		idx := BestMatchIndex(m.Title, names)
+		idx := BestMatchIndex(e.title, names)
 		found := lookupItems{
 			names[idx],
 			res.Results[idx].ID,
 			res.Results[idx].OriginCountry,
 		}
-		cache.Store(m.Title, found)
-		m.Title = found.title
-		m.tmdbID = found.id
-		m.Countries = found.countries
+		cache.Store(e.title, found)
+		e.title = found.title
+		e.tmdbID = found.id
 		return nil
 	}
 }
 
-func lookupEpisode(c *tmdb.TMDb, m *Media) error {
-	if m.tmdbID == 0 {
-		return fmt.Errorf("could not look up episode; TMDB ID not set for %v", m)
+func lookupEpisode(c *tmdb.TMDb, e *episode) error {
+	if e.tmdbID == 0 {
+		return fmt.Errorf("could not look up episode; TMDB ID not set for %v", e)
 	}
-	ep, err := c.GetTvEpisodeInfo(m.tmdbID, m.TvEpisode.Season, m.TvEpisode.Episode, map[string]string{})
+	ep, err := c.GetTvEpisodeInfo(e.tmdbID, e.season, e.episode, map[string]string{})
 	if err != nil {
 		return fmt.Errorf("failed to look up episode with error %v", err)
 	}
-	m.TvEpisode.Title = ep.Name
+	e.title = ep.Name
 	return nil
 }
 
-// When a match can't be found immediately, the search is retried
-// in a loop by removing one word at a time from the end of the title.
-// To prevent instances of matching on 1 word out of many, which is
-// unlikely to yield an accurate match, the number of times the search
-// will be retried with a modified title is limited.
-func lookupMovie(c *tmdb.TMDb, m *Media) error {
-	opts := map[string]string{}
-	title := m.Title
-	limit := (strings.Count(m.Title, " ") + 1) / 3
-
-	// TODO
-	// /mnt/qbittorrent/qBittorrent/downloads/04 ~ Dirty Pair The Movie (1986) (BDRip 1792x1080p x265 HEVC FLAC, AC-3x2 2.0x3)(Triple Audio)[sxales]/Dirty Pair The Movie (1986) (BDRip 1792x1080p x265 HEVC FLAC, AC-3x2 2.0x3)(Triple Audio)[sxales].mkv   /idk/movies/Captain Tsubasa Movie 04: The great world competition The Junior World Cup (1986)/Dirty Pair The Movie (1986) (BDRip 1792x1080p x265 HEVC FLAC, AC-3x2 2.0x3)(Triple Audio)[sxales].mkv
-	for i := 0; i <= limit; i++ {
-		if title == "" {
-			return fmt.Errorf("failed to look up movie with title %s", m.Title)
-		}
-		// TODO: debug log
-		// fmt.Println("Searching for movie", title)
-		res, err := c.SearchMovie(title, opts)
-		if err != nil {
-			return fmt.Errorf("error looking up movie with title %s", title)
-		}
-		switch len(res.Results) {
-		case 0:
-			// pop a word off the end and continue
-			t, err := titlePop(title)
-			if err != nil {
-				return err
-			}
-			title = t
-			continue
-		case 1:
-			m.Title = res.Results[0].Title
-			return nil
-		default:
-			match := []tmdb.MovieShort{}
-			for _, movie := range res.Results {
-				if err != nil {
-					fmt.Println("failed to retrieve movie releases")
-				}
-				if movieDateMatch(m.Date, movie.ReleaseDate) {
-					match = append(match, movie)
-				}
-			}
-			switch len(match) {
-			case 0:
-				// pop a word off the end and continue
-				t, err := titlePop(title)
-				if err != nil {
-					return err
-				}
-				title = t
-				continue
-			case 1:
-				m.Title = match[0].Title
-				return nil
-			default:
-				names := make([]string, len(res.Results))
-				for i, j := range res.Results {
-					names[i] = j.Title
-				}
-				m.Title = res.Results[BestMatchIndex(title, names)].Title
-				return nil
-			}
-		}
-	}
-	return nil
-}
-
+// TODO: Port to new movie matcher
 func titlePop(t string) (string, error) {
 	items := strings.Split(t, " ")
 	if len(items) < 1 {
@@ -417,161 +433,38 @@ func BestMatchIndex(s string, c []string) int {
 	return dMap[dists[0]]
 }
 
-func DateMatch(d1, d2 string) bool {
-	if d1 == d2 {
-		return true
-	}
-
-	y1, _, _ := strings.Cut(d1, "-")
-	y2, _, _ := strings.Cut(d2, "-")
-	return y1 == y2
-}
-
-// some media has a date that is earlier than what TMDB
-// returns because TMDB seems to use the theatrical premier.
-// however some media have a limited premier, particularly
-// at festivals, that are often used as the release year
-// otherwise
-func movieDateMatch(parsedDate, date string) bool {
-	if parsedDate == date {
-		return true
-	}
-
-	parsedYearString, _, _ := strings.Cut(parsedDate, "-")
-	dateYearString, _, _ := strings.Cut(date, "-")
-
-	parsedYear, err := strconv.Atoi(parsedYearString)
-	if err != nil {
-		return false
-	}
-
-	dateYear, err := strconv.Atoi(dateYearString)
-	if err != nil {
-		return false
-	}
-
-	for i := 0; i < 2; i++ {
-		if parsedYear+i == dateYear {
-			return true
-		}
-	}
-	return false
-}
-
 type Link struct {
 	Src    string
 	Target string
 }
 
-func (l Link) Exists() bool {
-	_, err := os.Stat(l.Target)
+func (ln Link) Exists() bool {
+	_, err := os.Stat(ln.Target)
 	return !os.IsNotExist(err)
 }
 
-func (l Link) Create() {
-	if l.Exists() {
-		fmt.Printf("target %v already exists\n", l.Target)
+func (ln Link) Create() {
+	if ln.Exists() {
+		fmt.Printf("target %v already exists\n", ln.Target)
 		return
 	}
 
-	if err := os.MkdirAll(filepath.Dir(l.Target), 0755); err != nil {
-		fmt.Printf("error %v encountered when creating path for %v\n", err, l.Target)
+	if err := os.MkdirAll(filepath.Dir(ln.Target), 0755); err != nil {
+		fmt.Printf("error %v encountered when creating path for %v\n", err, ln.Target)
 		return
 	}
 
-	if err := os.Link(l.Src, l.Target); err != nil {
-		fmt.Printf("error %v encountered when creating link for %v\n", err, l)
+	if err := os.Link(ln.Src, ln.Target); err != nil {
+		fmt.Printf("error %v encountered when creating link for %v\n", err, ln)
 	}
 }
 
-var (
-	episodeExpr  = regexp.MustCompile(`(?i)(s\d+)(e\d+)-?(e\d+)*`)
-	sentinelExpr = regexp.MustCompile(`(?i)\b(\d{3,4}[ip]|limited|unrated|web(-dl|rip)|bluray|10bit|pal|re(rip|pack)|dvdrip|a\.k\.a\.?|aka)\b`)
-	seasonExpr   = regexp.MustCompile(`(?i)s(\d+)`)
-	dateExpr     = regexp.MustCompile(`(\b(?:19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
-)
-
-// func NewLinks(Option...) []Link
-func NewMedia(p string) Media {
-	m := Media{}
-	m.Path = p
-	m.TvEpisode = Episode{
-		Season:  -1,
-		Episode: -1,
+func LinkFromMedia(l Linkable, destdir string) Link {
+	ln := Link{
+		Src:    l.Path(),
+		Target: path.Join(destdir, l.Target()),
 	}
-
-	d, f := filepath.Split(p)
-	d = filepath.Base(d)
-	for _, name := range []string{f, d} {
-		end := len(name)
-		epLoc := episodeExpr.FindStringIndex(name)
-
-		if epLoc != nil {
-			if epLoc[0] > 0 {
-				end = epLoc[0] - 1
-			}
-
-			m.Type = TV
-			m.TvEpisode.ID = name[epLoc[0]:epLoc[1]]
-			{
-				season, err := strconv.Atoi(seasonExpr.FindString(m.TvEpisode.ID)[1:])
-				if err != nil {
-					fmt.Println("error parsing season number", err)
-				} else {
-					m.TvEpisode.Season = season
-				}
-			}
-			{
-				eps := strings.Split(strings.ToLower(m.TvEpisode.ID), "e")
-				episode, err := strconv.Atoi(strings.TrimSuffix(eps[1], "-"))
-
-				if err != nil {
-					fmt.Println("error parsing episode number from", m.TvEpisode.ID, "with error", err)
-				} else {
-					m.TvEpisode.Episode = episode
-				}
-			}
-		}
-		dateLoc := dateExpr.FindStringIndex(name)
-		if dateLoc != nil {
-			m.Date = name[dateLoc[0]:dateLoc[1]]
-			if dateLoc[0] > 0 && dateLoc[0] < end {
-				end = dateLoc[0] - 1
-			}
-		}
-		sLoc := sentinelExpr.FindStringIndex(name)
-		if sLoc != nil && sLoc[0] > 0 && sLoc[0] < end {
-			end = sLoc[0] - 1
-		}
-		if dateLoc != nil || epLoc != nil {
-			n := name[:end]
-			m.Title = makeTitle(n)
-		}
-		if epLoc != nil {
-			start := epLoc[1] + 1
-			end := len(name)
-			if dateLoc != nil && dateLoc[0] < end && dateLoc[0]-1 > start {
-				end = dateLoc[0] - 1
-			}
-			//if sLoc != nil {
-			//	fmt.Println(name, "start:", start, "end:", end, "sentinel:", name[sLoc[0]:sLoc[1]], "sLog[0]:", sLoc[0], "episode", epLoc[1])
-			//}
-			if sLoc != nil && sLoc[0] < end {
-				if sLoc[0] > start {
-					end = sLoc[0] - 1
-				}
-				// If the slice start is the same as the sentinel match, the
-				// title is probably not in the name
-				if sLoc[0] == start {
-					end = start
-				}
-			}
-			n := name[start:end]
-			m.TvEpisode.Title = makeTitle(n)
-		}
-	}
-
-	return m
+	return ln
 }
 
 // Normalize a title
@@ -585,8 +478,8 @@ func makeTitle(s string) string {
 	}
 }
 
-func findFiles(root string, filters ...fileFilter) (<-chan Media, <-chan error) {
-	c := make(chan Media)
+func findFiles(root string, filters ...fileFilter) (<-chan Linkable, <-chan error) {
+	c := make(chan Linkable)
 	errc := make(chan error, 1)
 	if _, err := os.Stat(root); err != nil {
 		close(c)
@@ -629,10 +522,11 @@ func findFiles(root string, filters ...fileFilter) (<-chan Media, <-chan error) 
 						return
 					}
 				}
-				m := NewMedia(path)
-				if m.Title != "" {
-					c <- m
+				m, err := NewLinkable(path)
+				if err != nil {
+					return
 				}
+				c <- m
 			}()
 			return nil
 		})
@@ -667,20 +561,25 @@ func LinkFromFiles(optionConfig ...Option) (<-chan Link, <-chan error) {
 					defer wg.Done()
 					// type exclusion may be done before an expensive TMDBLookup call
 					// because the required properties are already set
-					if _, ok := options.excludeTypes[m.Type]; ok {
-						return
+					switch m.(type) {
+					case *movie:
+						if _, ok := options.excludeTypes["movie"]; ok {
+							return
+						}
+					case *episode:
+						if _, ok := options.excludeTypes["episode"]; ok {
+							return
+						}
 					}
 					if options.TMDBClient != nil {
-						m.TMDBLookup(options.TMDBClient)
-						//fmt.Println("Looked up", m)
+						TMDBLookup(m, options.TMDBClient)
 					}
 					for _, filter := range options.mediaFilters {
 						if filter.exclude(m) {
 							return
 						}
 					}
-					target := m.target(options.dest)
-					linkc <- Link{Src: m.Path, Target: target}
+					linkc <- LinkFromMedia(m, options.dest)
 				}()
 			}
 		}

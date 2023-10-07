@@ -66,7 +66,7 @@ func TestFindFiles(t *testing.T) {
 		media, _ := findFiles(root, NewRegexpFilter(i.excludes))
 		for m := range media {
 			// strip tmpdir prefix off of each path
-			got = append(got, m.Path[len(root)+1:len(m.Path)])
+			got = append(got, m.Path()[len(root)+1:len(m.Path())])
 		}
 		got.Sort()
 		want := sort.StringSlice(i.found)
@@ -79,4 +79,76 @@ func TestFindFiles(t *testing.T) {
 			t.Errorf("findFiles() mismatch (-want +got):\n%s", diff)
 		}
 	}
+}
+
+func TestMovieFromPath(t *testing.T) {
+	tt := []struct {
+		path  string
+		movie *movie
+	}{{
+		"/foo/bar/Foobar/Foobar.1999.2160p.WEB-DL.mkv",
+		&movie{
+			path:  "/foo/bar/Foobar/Foobar.1999.2160p.WEB-DL.mkv",
+			title: "Foobar",
+			year:  "1999",
+		},
+	}, {
+		"/foo/bar/night.of.the.BEAST.2022/idk.mkv",
+		&movie{
+			path:  "/foo/bar/night.of.the.BEAST.2022/idk.mkv",
+			title: "Night Of The BEAST",
+			year:  "2022",
+		},
+	}}
+
+	for _, w := range tt {
+		g, err := MovieFromPath(w.path)
+		if err != nil {
+			t.Errorf("failed to create movie from path %s", w.path)
+		}
+		if diff := cmp.Diff(w.movie, g, cmp.AllowUnexported(movie{})); diff != "" {
+			t.Errorf("MovieFromPath() mismatch (-want +got):\n%s", diff)
+		}
+	}
+}
+
+func TestEpisodeFromPath(t *testing.T) {
+	tt := []struct {
+		path    string
+		episode *episode
+	}{{
+		"/foo/bar/clobberin.time/clobberin.time.s01e01.lets.go.mkv",
+		&episode{
+			path:    "/foo/bar/clobberin.time/clobberin.time.s01e01.lets.go.mkv",
+			series:  "Clobberin Time",
+			title:   "Lets Go",
+			id:      "s01e01",
+			season:  1,
+			episode: 1,
+		},
+	}, {
+		"/foo/bar/BEASTMODE - S00E10E11E12.mkv",
+		&episode{
+			path:    "/foo/bar/BEASTMODE - S00E10E11E12.mkv",
+			series:  "BEASTMODE",
+			title:   "",
+			id:      "S00E10E11E12",
+			season:  0,
+			episode: 10,
+		},
+	}}
+
+	for _, w := range tt {
+		g, err := EpisodeFromPath(w.path)
+		if err != nil {
+			t.Errorf("failed to create episode from path %s", w.path)
+		}
+		if diff := cmp.Diff(w.episode, g, cmp.AllowUnexported(episode{})); diff != "" {
+			t.Errorf("MovieFromPath() mismatch (-want +got):\n%s", diff)
+		}
+	}
+}
+
+func TestTitlePermutations(t *testing.T) {
+
 }
