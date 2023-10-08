@@ -289,7 +289,7 @@ func EpisodeFromPath(path string) (*episode, error) {
 
 type movie struct {
 	title  string
-	year   string
+	year   string // TODO: int instead of string
 	path   string
 	tmdbID int
 }
@@ -363,9 +363,11 @@ func NewLinkable(path string) (Linkable, error) {
 func TMDBLookup(l Linkable, c *tmdb.TMDb) {
 	switch v := l.(type) {
 	case *episode:
-		//lookupTV(c, v)
-		//lookupEpisode(c, v)
-		//options.TMDBC2.SearchEpisode(v.series)
+		details, err := options.TMDBC2.SearchEpisode(v.series, v.year, v.season, v.episode)
+		if err != nil {
+			return
+		}
+		v.title = details.Name
 	case *movie:
 		res, err := options.TMDBC2.SearchMovie(v.title, map[string]string{"year": v.year})
 		if err != nil {
@@ -374,64 +376,6 @@ func TMDBLookup(l Linkable, c *tmdb.TMDb) {
 		}
 		v.title = res.Title
 	}
-}
-
-func lookupTV(c *tmdb.TMDb, e *episode) error {
-	options := map[string]string{}
-
-	if cached, ok := cache.Load(e.title); ok {
-		e.title = cached.title
-		e.tmdbID = cached.id
-		return nil
-	}
-
-	// TODO: series search
-	res, err := c.SearchTv(e.series, options)
-	if err != nil {
-		return fmt.Errorf("failed to look up %v", e)
-	}
-
-	switch len(res.Results) {
-	case 0:
-		return fmt.Errorf("no results found in search for %v", e)
-	case 1:
-		found := lookupItems{
-			res.Results[0].Name,
-			res.Results[0].ID,
-			res.Results[0].OriginCountry,
-		}
-		cache.Store(e.series, found)
-		e.title = found.title
-		e.tmdbID = found.id
-		return nil
-	default:
-		names := make([]string, len(res.Results))
-		for i, j := range res.Results {
-			names[i] = j.Name
-		}
-		idx := BestMatchIndex(e.title, names)
-		found := lookupItems{
-			names[idx],
-			res.Results[idx].ID,
-			res.Results[idx].OriginCountry,
-		}
-		cache.Store(e.title, found)
-		e.title = found.title
-		e.tmdbID = found.id
-		return nil
-	}
-}
-
-func lookupEpisode(c *tmdb.TMDb, e *episode) error {
-	if e.tmdbID == 0 {
-		return fmt.Errorf("could not look up episode; TMDB ID not set for %v", e)
-	}
-	ep, err := c.GetTvEpisodeInfo(e.tmdbID, e.season, e.episode, map[string]string{})
-	if err != nil {
-		return fmt.Errorf("failed to look up episode with error %v", err)
-	}
-	e.title = ep.Name
-	return nil
 }
 
 // TODO: Port to new movie matcher
