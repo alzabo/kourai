@@ -363,11 +363,12 @@ func NewLinkable(path string) (Linkable, error) {
 func TMDBLookup(l Linkable, c *tmdb.TMDb) {
 	switch v := l.(type) {
 	case *episode:
-		details, err := options.TMDBC2.SearchEpisode(v.series, v.year, v.season, v.episode)
+		ep, show, err := options.TMDBC2.SearchEpisode(v.series, v.year, v.season, v.episode)
 		if err != nil {
 			return
 		}
-		v.title = details.Name
+		v.series = show.Name
+		v.title = ep.Name
 	case *movie:
 		res, err := options.TMDBC2.SearchMovie(v.title, map[string]string{"year": v.year})
 		if err != nil {

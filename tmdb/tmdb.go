@@ -188,7 +188,7 @@ func (t *TMDB) SearchTV(query string, done <-chan struct{}, options map[string]s
 	return c, errc
 }
 
-func (t *TMDB) SearchEpisode(series string, seriesYear int, season int, episode int) (EpisodeDetails, error) {
+func (t *TMDB) SearchEpisode(series string, seriesYear int, season int, episode int) (EpisodeDetails, TVSearchResult, error) {
 	done := make(chan struct{})
 	defer close(done)
 
@@ -199,7 +199,7 @@ func (t *TMDB) SearchEpisode(series string, seriesYear int, season int, episode 
 	}
 	res, errc := t.SearchTV(series, done, searchopts)
 	if err := <-errc; err != nil {
-		return ep, err
+		return ep, TVSearchResult{}, err
 	}
 	show := <-res
 
@@ -207,7 +207,7 @@ func (t *TMDB) SearchEpisode(series string, seriesYear int, season int, episode 
 		fmt.Sprintf("?api_key=%s", t.key)
 
 	err := fetch(query, &ep)
-	return ep, err
+	return ep, show, err
 }
 
 func New(k string) *TMDB {
