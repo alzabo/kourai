@@ -115,9 +115,11 @@ func TestMovieFromPath(t *testing.T) {
 func TestEpisodeFromPath(t *testing.T) {
 	tt := []struct {
 		path    string
+		target  string
 		episode *episode
 	}{{
 		"/foo/bar/clobberin.time/clobberin.time.s01e01.lets.go.mkv",
+		"tv/Clobberin Time/Season 1/Clobberin Time - S01E01 - Lets Go.mkv",
 		&episode{
 			path:    "/foo/bar/clobberin.time/clobberin.time.s01e01.lets.go.mkv",
 			series:  "Clobberin Time",
@@ -127,14 +129,28 @@ func TestEpisodeFromPath(t *testing.T) {
 			episode: 1,
 		},
 	}, {
-		"/foo/bar/BEASTMODE - S00E10E11E12.mkv",
+		"/foo/bar/BEASTMODE (2001) - S00E10E11E12.mkv",
+		"tv/BEASTMODE (2001)/Specials/BEASTMODE (2001) - S00E10-E12.mkv",
 		&episode{
-			path:    "/foo/bar/BEASTMODE - S00E10E11E12.mkv",
+			path:    "/foo/bar/BEASTMODE (2001) - S00E10E11E12.mkv",
 			series:  "BEASTMODE",
 			title:   "",
 			id:      "S00E10E11E12",
 			season:  0,
 			episode: 10,
+			year:    2001,
+		},
+	}, {
+		"/foo/bar/BEASTMODE (2001-01-01) - S01E01 - The BEAST.mkv",
+		"tv/BEASTMODE (2001)/Season 1/BEASTMODE (2001) - S01E01 - The BEAST.mkv",
+		&episode{
+			path:    "/foo/bar/BEASTMODE (2001-01-01) - S01E01 - The BEAST.mkv",
+			series:  "BEASTMODE",
+			title:   "The BEAST",
+			id:      "S01E01",
+			season:  1,
+			episode: 1,
+			year:    2001,
 		},
 	}}
 
@@ -145,6 +161,9 @@ func TestEpisodeFromPath(t *testing.T) {
 		}
 		if diff := cmp.Diff(w.episode, g, cmp.AllowUnexported(episode{})); diff != "" {
 			t.Errorf("MovieFromPath() mismatch (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff(w.target, g.Target()); diff != "" {
+			t.Errorf("movie.Target() mismatch (-want +got):\n%s", diff)
 		}
 	}
 }

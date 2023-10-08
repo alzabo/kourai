@@ -32,7 +32,7 @@ var (
 	episodeExpr  = regexp.MustCompile(`(?i)(s\d+)(e\d+)-?(e\d+)*`)
 	sentinelExpr = regexp.MustCompile(`(?i)\b(\d{3,4}[ip]|limited|unrated|web(-dl|rip)|bluray|10bit|pal|re(rip|pack)|dvdrip|a\.k\.a\.?|aka)\b`)
 	seasonExpr   = regexp.MustCompile(`(?i)s(\d+)`)
-	dateExpr     = regexp.MustCompile(`(\b(19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
+	dateExpr     = regexp.MustCompile(`(?:\b(19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
 )
 
 func newTMDBCache() *tmdbCache {
@@ -168,6 +168,7 @@ type episode struct {
 	id      string
 	season  int
 	episode int
+	year    int
 	path    string
 	tmdbID  int
 }
@@ -198,13 +199,20 @@ func (e *episode) Target() string {
 		ep = strings.ToUpper(e.id)
 	}
 
+	var series string
+	if e.year != 0 {
+		series = fmt.Sprintf("%s (%d)", e.series, e.year)
+	} else {
+		series = e.series
+	}
+
 	var target string
-	dir := fmt.Sprintf("tv/%s/%s", e.series, season)
+	dir := fmt.Sprintf("tv/%s/%s", series, season)
 	ext := filepath.Ext(e.path)
 	if e.title != "" {
-		target = fmt.Sprintf("%s/%s - %s - %s%s", dir, e.series, ep, e.title, ext)
+		target = fmt.Sprintf("%s/%s - %s - %s%s", dir, series, ep, e.title, ext)
 	} else {
-		target = fmt.Sprintf("%s/%s - %s%s", dir, e.series, ep, ext)
+		target = fmt.Sprintf("%s/%s - %s%s", dir, series, ep, ext)
 	}
 	return target
 }
@@ -212,20 +220,22 @@ func (e *episode) Target() string {
 func EpisodeFromPath(path string) (*episode, error) {
 	ep := &episode{path: path}
 	var errs []error
+	var title [2]int
+	var series [2]int
 
 	_, file := filepath.Split(path)
 	ext := filepath.Ext(file)
 	basename := file[:len(file)-len(ext)]
 
-	epLoc := episodeExpr.FindStringIndex(basename)
-	if epLoc == nil {
+	if loc := episodeExpr.FindStringIndex(basename); loc != nil {
+		ep.id = basename[loc[0]:loc[1]]
+		title[0] = loc[1] + 1
+		if loc[0] > 0 {
+			series[1] = loc[0] - 1
+		}
+	} else {
 		return ep, fmt.Errorf("could not determine episode ID given path \"%s\"; expression %v", basename, episodeExpr)
 	}
-	if epLoc[0] > 0 {
-		end := epLoc[0] - 1
-		ep.series = makeTitle(basename[:end])
-	}
-	ep.id = basename[epLoc[0]:epLoc[1]]
 
 	if s, err := strconv.Atoi(seasonExpr.FindString(ep.id)[1:]); err != nil {
 		errs = append(errs, fmt.Errorf("error parsing season number: %w", err))
@@ -240,28 +250,39 @@ func EpisodeFromPath(path string) (*episode, error) {
 		ep.episode = e
 	}
 
-	start := epLoc[1] + 1
-	end := len(basename)
-
-	dateLoc := dateExpr.FindStringIndex(basename)
-	if dateLoc != nil && dateLoc[0] < end && dateLoc[0]-1 > start {
-		end = dateLoc[0] - 1
-	}
-	sLoc := sentinelExpr.FindStringIndex(basename)
-	if sLoc != nil && sLoc[0] < end {
-		if sLoc[0] > start {
-			end = sLoc[0] - 1
+	title[1] = len(basename)
+	if loc := dateExpr.FindStringIndex(basename); loc != nil {
+		date := basename[loc[0]:loc[1]]
+		year, _, _ := strings.Cut(date, "-")
+		var err error
+		ep.year, err = strconv.Atoi(year)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("could not parse episode year with error %w", err))
 		}
-		// If the slice start is the same as the sentinel match, the
-		// title is probably not in the name
-		if sLoc[0] == start {
-			end = start
+		// If a date is given, it will come after the series name.
+		// The end index of the series is updated to the index before the
+		// beginning of the date match
+		if loc[0] < series[1] && loc[0]-1 > series[0] {
+			series[1] = loc[0] - 1
 		}
 	}
-	if start <= end {
-		n := basename[start:end]
+	if loc := sentinelExpr.FindStringIndex(basename); loc != nil {
+		if loc[0] < title[1] {
+			if loc[0] > title[0] {
+				title[1] = loc[0] - 1
+			} else
+			// If the title start is the same as the sentinel match, the
+			// title is probably not in the name
+			if loc[0] == title[0] {
+				title[1] = title[0]
+			}
+		}
+	}
+	if title[0] <= title[1] {
+		n := basename[title[0]:title[1]]
 		ep.title = makeTitle(n)
 	}
+	ep.series = makeTitle(basename[series[0]:series[1]])
 
 	return ep, errors.Join(errs...)
 }
@@ -342,8 +363,9 @@ func NewLinkable(path string) (Linkable, error) {
 func TMDBLookup(l Linkable, c *tmdb.TMDb) {
 	switch v := l.(type) {
 	case *episode:
-		lookupTV(c, v)
-		lookupEpisode(c, v)
+		//lookupTV(c, v)
+		//lookupEpisode(c, v)
+		//options.TMDBC2.SearchEpisode(v.series)
 	case *movie:
 		res, err := options.TMDBC2.SearchMovie(v.title, map[string]string{"year": v.year})
 		if err != nil {
