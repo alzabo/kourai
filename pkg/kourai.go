@@ -8,17 +8,14 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	tmdb_ "github.com/alzabo/kourai/tmdb"
+	tmdb "github.com/alzabo/kourai/tmdb"
 
-	"github.com/agnivade/levenshtein"
-	"github.com/ryanbradynd05/go-tmdb"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
@@ -27,7 +24,6 @@ import (
 // is newer
 
 var (
-	cache        *tmdbCache
 	options      *Options
 	episodeExpr  = regexp.MustCompile(`(?i)(s\d+)(e\d+)-?(e\d+)*`)
 	sentinelExpr = regexp.MustCompile(`(?i)\b(\d{3,4}[ip]|limited|unrated|web(-dl|rip)|bluray|10bit|pal|re(rip|pack)|dvdrip|a\.k\.a\.?|aka)\b`)
@@ -35,41 +31,9 @@ var (
 	dateExpr     = regexp.MustCompile(`(?:\b(19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
 )
 
-func newTMDBCache() *tmdbCache {
-	c := tmdbCache{
-		internal: map[string]lookupItems{},
-	}
-	return &c
-}
-
-type tmdbCache struct {
-	mutex    sync.RWMutex
-	internal map[string]lookupItems
-}
-
-func (c *tmdbCache) Store(k string, v lookupItems) {
-	c.mutex.Lock()
-	c.internal[k] = v
-	c.mutex.Unlock()
-}
-
-func (c *tmdbCache) Load(k string) (lookupItems, bool) {
-	c.mutex.RLock()
-	v, ok := c.internal[k]
-	c.mutex.RUnlock()
-	return v, ok
-}
-
-type lookupItems struct {
-	title     string
-	id        int
-	countries []string
-}
-
 type Options struct {
 	SkipTitleCaser bool
-	TMDBClient     *tmdb.TMDb
-	TMDBC2         *tmdb_.TMDB
+	TMDBClient     *tmdb.TMDB
 	fileFilters    []fileFilter
 	mediaFilters   []mediaFilter
 	sources        []string
@@ -111,8 +75,7 @@ func WithTMDBApiKey(k string) Option {
 		if k == "" {
 			return
 		}
-		o.TMDBClient = tmdb.Init(tmdb.Config{APIKey: k})
-		o.TMDBC2 = tmdb_.New(k)
+		o.TMDBClient = tmdb.New(k)
 	}
 }
 
@@ -360,44 +323,38 @@ func NewLinkable(path string) (Linkable, error) {
 	return l, err
 }
 
-func TMDBLookup(l Linkable, c *tmdb.TMDb) {
+func tmdbLookup(l Linkable) {
 	switch v := l.(type) {
 	case *episode:
-		ep, show, err := options.TMDBC2.SearchEpisode(v.series, v.year, v.season, v.episode)
+		ep, show, err := options.TMDBClient.SearchEpisode(v.series, v.year, v.season, v.episode)
 		if err != nil {
 			return
 		}
 		v.series = show.Name
 		v.title = ep.Name
 	case *movie:
-		res, err := options.TMDBC2.SearchMovie(v.title, map[string]string{"year": v.year})
-		if err != nil {
-			fmt.Println("failed to look up movie:", err)
+		for _, i := range titleVariants(v.title, strings.Count(v.title, " ")/2+1) {
+			res, err := options.TMDBClient.SearchMovie(i, map[string]string{"year": v.year})
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+			v.title = res.Title
 			return
 		}
-		v.title = res.Title
 	}
 }
 
-// TODO: Port to new movie matcher
-func titlePop(t string) (string, error) {
+// TODO: This could be a little more sophisticated
+// strip single non-word characters, partition on
+// non-alphanum surrounded by spaces
+func titleVariants(t string, max int) []string {
 	items := strings.Split(t, " ")
-	if len(items) < 1 {
-		return "", errors.New("created empty string when removing last word")
+	new := []string{}
+	for i := 0; i < max && i < len(items); i++ {
+		new = append(new, strings.Join(items[:len(items)-i], " "))
 	}
-	return strings.Join(items[0:len(items)-1], " "), nil
-}
-
-func BestMatchIndex(s string, c []string) int {
-	dists := sort.IntSlice{}
-	dMap := map[int]int{}
-	for i, j := range c {
-		d := levenshtein.ComputeDistance(s, j)
-		dists = append(dists, d)
-		dMap[d] = i
-	}
-	dists.Sort()
-	return dMap[dists[0]]
+	return new
 }
 
 type Link struct {
@@ -539,7 +496,9 @@ func LinkFromFiles(optionConfig ...Option) (<-chan Link, <-chan error) {
 						}
 					}
 					if options.TMDBClient != nil {
-						TMDBLookup(m, options.TMDBClient)
+						tmdbLookup(m)
+					} else {
+						fmt.Println("it's broken")
 					}
 					for _, filter := range options.mediaFilters {
 						if filter.exclude(m) {
@@ -577,7 +536,7 @@ func Nlinks(d fs.DirEntry) (count uint64, err error) {
 }
 
 func Search(key string, f string, options map[string]string) {
-	client := tmdb_.New(key)
+	client := tmdb.New(key)
 	res, errc := client.SearchMovies(f, nil, options)
 	if err := <-errc; err != nil {
 		// log
@@ -591,5 +550,4 @@ func Search(key string, f string, options map[string]string) {
 
 func init() {
 	options = NewOptions()
-	cache = newTMDBCache()
 }

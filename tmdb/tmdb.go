@@ -1,15 +1,30 @@
 package kourai
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"time"
+
+	"golang.org/x/time/rate"
 )
+
+var (
+	limiter  *rate.Limiter
+	requestc chan request
+)
+
+type request struct {
+	url       string
+	container any
+	errc      chan error
+}
 
 type MovieSearchResults struct {
 	Results      []MovieSearchResult
@@ -88,30 +103,15 @@ func (t *TMDB) SearchMovies(title string, done <-chan struct{}, options map[stri
 		params = append(params, fmt.Sprintf("%s=%s", k, url.QueryEscape(v)))
 	}
 
-	searchUrl, _ := url.JoinPath(t.baseUrl, "3/search/movie")
-	searchUrl += fmt.Sprintf("?api_key=%s", t.key) +
+	u := "https://api.themoviedb.org/3/search/movie" +
+		fmt.Sprintf("?api_key=%s", t.key) +
 		"&" + strings.Join(params, "&")
 
-	req, _ := http.NewRequest("GET", searchUrl, nil)
-	req.Header.Add("accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		errs = append(errs, err)
-	} else {
-		defer res.Body.Close()
-	}
-
-	// check the status code res.StatusCode
-	var body []byte
-	if b, err := io.ReadAll(res.Body); err != nil {
-		errs = append(errs, err)
-	} else {
-		body = b
-	}
-	//fmt.Println(string(body))
-
 	var movies MovieSearchResults
-	if err := json.Unmarshal(body, &movies); err != nil {
+	//fetch(u, &movies)
+	res := make(chan error)
+	requestc <- request{url: u, container: &movies, errc: res}
+	if err := <-res; err != nil {
 		errs = append(errs, err)
 	}
 
@@ -159,15 +159,17 @@ func (t *TMDB) SearchTV(query string, done <-chan struct{}, options map[string]s
 		params = append(params, fmt.Sprintf("%s=%s", k, url.QueryEscape(v)))
 	}
 
-	query = "https://api.themoviedb.org/3/search/tv" +
+	u := "https://api.themoviedb.org/3/search/tv" +
 		fmt.Sprintf("?api_key=%s", t.key) +
 		"&" + strings.Join(params, "&")
 
 	var series TVSearchResults
-	err := fetch(query, &series)
-	if err != nil {
+	res := make(chan error)
+	requestc <- request{url: u, container: &series, errc: res}
+	if err := <-res; err != nil {
 		errs = append(errs, err)
 	}
+
 	if len(series.Results) == 0 {
 		errs = append(errs, fmt.Errorf("no results found at tmdb for query: \"%s\" with options %v", query, options))
 	}
@@ -175,7 +177,6 @@ func (t *TMDB) SearchTV(query string, done <-chan struct{}, options map[string]s
 	go func() {
 		defer close(c)
 		for _, r := range series.Results {
-			//fmt.Printf("before read: searched title %s with options %v; found %v", title, options, r)
 			select {
 			case c <- r:
 				//fmt.Printf("searched title %s with options %v; found %v\n", title, options, r)
@@ -212,24 +213,88 @@ func (t *TMDB) SearchEpisode(series string, seriesYear int, season int, episode 
 
 func New(k string) *TMDB {
 	t := TMDB{
-		key:     k,
-		baseUrl: "https://api.themoviedb.org",
+		key: k,
 	}
 	return &t
 }
 
+func fetch2(c <-chan request) {
+	cache := map[string]any{}
+	for r := range c {
+		var err error
+		if cached, ok := cache[r.url]; ok {
+			// TODO: read up on this, lol. It works, but is mostly just copied after Googling
+			// Naively assigning to the container without reflect doesn't update the value
+			// at the caller
+			ct := reflect.ValueOf(r.container).Elem()
+			v := reflect.ValueOf(cached).Elem()
+			ct.Set(v)
+			r.errc <- nil
+			close(r.errc)
+			continue
+		}
+
+		req, _ := http.NewRequest("GET", r.url, nil)
+		req.Header.Add("accept", "application/json")
+		ctx := context.Background()
+		limiter.Wait(ctx)
+
+		var res *http.Response
+		res, err = http.DefaultClient.Do(req)
+		if err != nil {
+			r.errc <- err
+			close(r.errc)
+			continue
+		}
+		// TODO: handle 429 responses
+		if res.StatusCode == 429 {
+			r.errc <- fmt.Errorf("rate limited (HTTP) 429")
+			close(r.errc)
+			continue
+		}
+
+		var body []byte
+		body, err = io.ReadAll(res.Body)
+		res.Body.Close()
+		if err != nil {
+			r.errc <- err
+			close(r.errc)
+			continue
+		}
+
+		if err := json.Unmarshal(body, r.container); err != nil {
+			r.errc <- err
+			close(r.errc)
+			continue
+		}
+
+		cache[r.url] = r.container
+		r.errc <- nil
+		close(r.errc)
+	}
+}
+
 func fetch(url string, dest any) error {
 	var errs []error
+
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Add("accept", "application/json")
+	ctx := context.Background()
+	limiter.Wait(ctx)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		errs = append(errs, err)
 	} else {
 		defer res.Body.Close()
 	}
+	// This handling could be better, but backing off would need to be handled
+	// in 1 synchronous place
+	if res.StatusCode == 429 {
+		errs = append(errs, fmt.Errorf("rate limited (HTTP) 429"))
+		fmt.Println("rate limited.")
+		return errors.Join(errs...)
+	}
 
-	// check the status code res.StatusCode
 	var body []byte
 	if b, err := io.ReadAll(res.Body); err != nil {
 		errs = append(errs, err)
@@ -241,4 +306,10 @@ func fetch(url string, dest any) error {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
+}
+
+func init() {
+	limiter = rate.NewLimiter(rate.Limit(40), 40) // was 40, 60
+	requestc = make(chan request)
+	go fetch2(requestc)
 }
