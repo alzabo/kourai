@@ -25,7 +25,7 @@ import (
 
 var (
 	options      *Options
-	episodeExpr  = regexp.MustCompile(`(?i)(s\d+)(e\d+)-?(e\d+)*`)
+	episodeExpr  = regexp.MustCompile(`(?i)(s\d+).?(e\d+)-?((?:e\d+)+)*`)
 	sentinelExpr = regexp.MustCompile(`(?i)\b(\d{3,4}[ip]|limited|unrated|web(-dl|rip)|bluray|10bit|pal|re(rip|pack)|dvdrip|a\.k\.a\.?|aka)\b`)
 	seasonExpr   = regexp.MustCompile(`(?i)s(\d+)`)
 	dateExpr     = regexp.MustCompile(`(?:\b(19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
@@ -190,11 +190,25 @@ func EpisodeFromPath(path string) (*episode, error) {
 	ext := filepath.Ext(file)
 	basename := file[:len(file)-len(ext)]
 
-	if loc := episodeExpr.FindStringIndex(basename); loc != nil {
-		ep.id = basename[loc[0]:loc[1]]
-		title[0] = loc[1] + 1
-		if loc[0] > 0 {
-			series[1] = loc[0] - 1
+	if locs := episodeExpr.FindStringSubmatchIndex(basename); locs != nil {
+		// This is probably not more efficient than using regexp.Replace to
+		// strip out unwanted characters from the full match
+		// Step through subexpression matches to build an ID that only contains
+		// season and episode identifiers, omitting characters that don't match
+		var start int = locs[0]
+		var end int
+		var epid string = ""
+		for i := 2; i < len(locs); i += 2 {
+			if locs[i] == -1 {
+				continue
+			}
+			end = locs[i+1]
+			epid += basename[locs[i]:end]
+		}
+		ep.id = epid
+		title[0] = end + 1
+		if start > 0 {
+			series[1] = start - 1
 		}
 	} else {
 		return ep, fmt.Errorf("could not determine episode ID given path \"%s\"; expression %v", basename, episodeExpr)

@@ -152,6 +152,17 @@ func TestEpisodeFromPath(t *testing.T) {
 			episode: 1,
 			year:    2001,
 		},
+	}, {
+		"/a/s/d/f/Nothing/Nothing - S01.E03.mkv",
+		"tv/Nothing/Season 1/Nothing - S01E03.mkv",
+		&episode{
+			path:    "/a/s/d/f/Nothing/Nothing - S01.E03.mkv",
+			series:  "Nothing",
+			title:   "",
+			id:      "S01E03",
+			season:  1,
+			episode: 3,
+		},
 	}}
 
 	for _, w := range tt {
