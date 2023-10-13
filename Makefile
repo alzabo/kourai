@@ -1,2 +1,2 @@
 build kourai:
-	env GCO_ENABLED=0 go build -o kourai
+	CGO_ENABLED=0 go build -o kourai -ldflags='-extldflags=-static' -x
