@@ -31,6 +31,8 @@ var (
 	dateExpr     = regexp.MustCompile(`(?:\b(19|20)\d{2}\b(?:-\d{1,2}-\d{1,2})?)`)
 )
 
+const oldestMovieYear int = 1888
+
 type Options struct {
 	SkipTitleCaser bool
 	TMDBClient     *tmdb.TMDB
@@ -278,12 +280,16 @@ func (m *movie) Path() string {
 func (m *movie) Target() string {
 	_, file := filepath.Split(m.path)
 	var dir string
-	if m.year != 0 {
+	if m.YearValid() {
 		dir = fmt.Sprintf("%s (%d)", m.title, m.year)
 	} else {
 		dir = m.title
 	}
 	return fmt.Sprintf("movies/%s/%s", dir, file)
+}
+
+func (m *movie) YearValid() bool {
+	return m.year >= oldestMovieYear
 }
 
 func MovieFromPath(path string) (*movie, error) {
@@ -304,6 +310,10 @@ func MovieFromPath(path string) (*movie, error) {
 				// TODO: log, if the regexp matched, it should parse
 				continue
 			}
+			if year < oldestMovieYear {
+				// TODO: log something here
+				continue
+			}
 			mov.year = year
 			if dateLoc[0] > 0 && dateLoc[0] < end {
 				end = dateLoc[0] - 1
@@ -313,13 +323,15 @@ func MovieFromPath(path string) (*movie, error) {
 		if sLoc != nil && sLoc[0] > 0 && sLoc[0] < end {
 			end = sLoc[0] - 1
 		}
-		n := i[:end]
-		mov.title = makeTitle(n)
-		if mov.title != "" && mov.year != 0 {
+		title := makeTitle(i[:end])
+		if len(title) > len(mov.title) {
+			mov.title = title
+		}
+		if mov.title != "" && mov.YearValid() {
 			break
 		}
 	}
-	if mov.title == "" || mov.year == 0 {
+	if mov.title == "" {
 		errs = append(errs, fmt.Errorf("failed to create movie from path \"%s\"; invalid movie %v", path, *mov))
 	}
 	return mov, errors.Join(errs...)
@@ -353,12 +365,20 @@ func tmdbLookup(l Linkable) {
 		v.title = ep.Name
 	case *movie:
 		for _, i := range titleVariants(v.title, strings.Count(v.title, " ")/2+1) {
-			res, err := options.TMDBClient.SearchMovie(i, map[string]string{"year": fmt.Sprint(v.year)})
+			var searchOpts map[string]string
+			if v.YearValid() {
+				searchOpts = map[string]string{"year": fmt.Sprint(v.year)}
+			}
+			res, err := options.TMDBClient.SearchMovie(i, searchOpts)
 			if err != nil {
 				fmt.Println(err)
 				continue
 			}
 			v.title = res.Title
+			fmt.Println(v, res)
+			if !v.YearValid() {
+				v.year = res.ReleaseDate.Year()
+			}
 			return
 		}
 	}

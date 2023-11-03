@@ -86,18 +86,25 @@ func TestMovieFromPath(t *testing.T) {
 		path  string
 		movie *movie
 	}{{
-		"/foo/bar/Foobar/Foobar.1999.2160p.WEB-DL.mkv",
-		&movie{
+		path: "/foo/bar/Foobar/Foobar.1999.2160p.WEB-DL.mkv",
+		movie: &movie{
 			path:  "/foo/bar/Foobar/Foobar.1999.2160p.WEB-DL.mkv",
 			title: "Foobar",
 			year:  1999,
 		},
 	}, {
-		"/foo/bar/night.of.the.BEAST.2022/idk.mkv",
-		&movie{
+		path: "/foo/bar/night.of.the.BEAST.2022/idk.mkv",
+		movie: &movie{
 			path:  "/foo/bar/night.of.the.BEAST.2022/idk.mkv",
 			title: "Night Of The BEAST",
 			year:  2022,
+		},
+	}, {
+		path: "/foo/just.the.title.mkv",
+		movie: &movie{
+			path:  "/foo/just.the.title.mkv",
+			title: "Just The Title",
+			year:  0,
 		},
 	}}
 
