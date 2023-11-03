@@ -49,7 +49,7 @@ func Execute() {
 	}
 }
 
-func timeFlagHelper(v string) (time.Time, error) {
+func timeFlagHelper(v string) (*time.Time, error) {
 	var t time.Time
 	var err error
 
@@ -65,28 +65,22 @@ func timeFlagHelper(v string) (time.Time, error) {
 		}
 		break
 	}
-	return t, err
+	return &t, err
 }
 
 func init() {
 	cobra.OnInitialize(initConfig)
 
 	goflag.Func("before", "Only consider files modified before the given date", func(d string) error {
-		t, err := timeFlagHelper(d)
-		if err != nil {
-			return err
-		}
-		before = &t
-		return nil
+		var err error
+		before, err = timeFlagHelper(d)
+		return err
 	})
 
-	goflag.Func("after", "Only consider files modified after the given date", func(d string) error {
-		t, err := timeFlagHelper(d)
-		if err != nil {
-			return err
-		}
-		after = &t
-		return nil
+	goflag.Func("since", "Only consider files modified after the given date", func(d string) error {
+		var err error
+		after, err = timeFlagHelper(d)
+		return err
 	})
 
 	// Add goflags to Cobra command
