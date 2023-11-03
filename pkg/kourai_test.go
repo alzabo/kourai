@@ -90,14 +90,14 @@ func TestMovieFromPath(t *testing.T) {
 		&movie{
 			path:  "/foo/bar/Foobar/Foobar.1999.2160p.WEB-DL.mkv",
 			title: "Foobar",
-			year:  "1999",
+			year:  1999,
 		},
 	}, {
 		"/foo/bar/night.of.the.BEAST.2022/idk.mkv",
 		&movie{
 			path:  "/foo/bar/night.of.the.BEAST.2022/idk.mkv",
 			title: "Night Of The BEAST",
-			year:  "2022",
+			year:  2022,
 		},
 	}}
 

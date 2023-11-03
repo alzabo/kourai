@@ -266,7 +266,7 @@ func EpisodeFromPath(path string) (*episode, error) {
 
 type movie struct {
 	title  string
-	year   string // TODO: int instead of string
+	year   int
 	path   string
 	tmdbID int
 }
@@ -278,8 +278,8 @@ func (m *movie) Path() string {
 func (m *movie) Target() string {
 	_, file := filepath.Split(m.path)
 	var dir string
-	if m.year != "" {
-		dir = fmt.Sprintf("%s (%s)", m.title, m.year)
+	if m.year != 0 {
+		dir = fmt.Sprintf("%s (%d)", m.title, m.year)
 	} else {
 		dir = m.title
 	}
@@ -299,7 +299,12 @@ func MovieFromPath(path string) (*movie, error) {
 		end := len(i)
 		dateLoc := dateExpr.FindStringIndex(i)
 		if dateLoc != nil {
-			mov.year = i[dateLoc[0]:dateLoc[1]]
+			year, err := strconv.Atoi(i[dateLoc[0]:dateLoc[1]])
+			if err != nil {
+				// TODO: log, if the regexp matched, it should parse
+				continue
+			}
+			mov.year = year
 			if dateLoc[0] > 0 && dateLoc[0] < end {
 				end = dateLoc[0] - 1
 			}
@@ -310,11 +315,11 @@ func MovieFromPath(path string) (*movie, error) {
 		}
 		n := i[:end]
 		mov.title = makeTitle(n)
-		if mov.title != "" && mov.year != "" {
+		if mov.title != "" && mov.year != 0 {
 			break
 		}
 	}
-	if mov.title == "" || mov.year == "" {
+	if mov.title == "" || mov.year == 0 {
 		errs = append(errs, fmt.Errorf("failed to create movie from path \"%s\"; invalid movie %v", path, *mov))
 	}
 	return mov, errors.Join(errs...)
@@ -348,7 +353,7 @@ func tmdbLookup(l Linkable) {
 		v.title = ep.Name
 	case *movie:
 		for _, i := range titleVariants(v.title, strings.Count(v.title, " ")/2+1) {
-			res, err := options.TMDBClient.SearchMovie(i, map[string]string{"year": v.year})
+			res, err := options.TMDBClient.SearchMovie(i, map[string]string{"year": fmt.Sprint(v.year)})
 			if err != nil {
 				fmt.Println(err)
 				continue
