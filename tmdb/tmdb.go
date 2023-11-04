@@ -45,10 +45,30 @@ type MovieSearchResult struct {
 	Overview         string
 	Popularity       float32
 
-	// TODO: proper date
 	ReleaseDate time.Time
 	VoteAverage float32
 	VoteCount   uint32
+}
+
+func (ms *MovieSearchResult) UnmarshalJSON(b []byte) error {
+	type Alias MovieSearchResult
+	aux := &struct {
+		*Alias
+		ReleaseDate string `json:"release_date"`
+	}{
+		Alias: (*Alias)(ms),
+	}
+	if err := json.Unmarshal(b, aux); err != nil {
+		return err
+	}
+
+	t, err := time.Parse("2006-01-02", aux.ReleaseDate)
+	if err != nil {
+		return nil
+	}
+	ms.ReleaseDate = t
+
+	return nil
 }
 
 type TVSearchResults struct {

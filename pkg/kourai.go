@@ -293,19 +293,19 @@ func (m *movie) YearValid() bool {
 }
 
 func MovieFromPath(path string) (*movie, error) {
-	mov := &movie{path: path}
-	var errs []error
+	//mov := &movie{path: path}
+	movies := [2]*movie{{path: path}, {path: path}}
 
 	dir, file := filepath.Split(path)
 	dir = filepath.Base(dir)
 	ext := filepath.Ext(file)
 	basename := file[:len(file)-len(ext)]
 
-	for _, i := range [2]string{basename, dir} {
-		end := len(i)
-		dateLoc := dateExpr.FindStringIndex(i)
+	for i, j := range [2]string{basename, dir} {
+		end := len(j)
+		dateLoc := dateExpr.FindStringIndex(j)
 		if dateLoc != nil {
-			year, err := strconv.Atoi(i[dateLoc[0]:dateLoc[1]])
+			year, err := strconv.Atoi(j[dateLoc[0]:dateLoc[1]])
 			if err != nil {
 				// TODO: log, if the regexp matched, it should parse
 				continue
@@ -314,27 +314,32 @@ func MovieFromPath(path string) (*movie, error) {
 				// TODO: log something here
 				continue
 			}
-			mov.year = year
+			movies[i].year = year
 			if dateLoc[0] > 0 && dateLoc[0] < end {
 				end = dateLoc[0] - 1
 			}
 		}
-		sLoc := sentinelExpr.FindStringIndex(i)
+		sLoc := sentinelExpr.FindStringIndex(j)
 		if sLoc != nil && sLoc[0] > 0 && sLoc[0] < end {
 			end = sLoc[0] - 1
 		}
-		title := makeTitle(i[:end])
-		if len(title) > len(mov.title) {
-			mov.title = title
-		}
-		if mov.title != "" && mov.YearValid() {
-			break
+		title := makeTitle(j[:end])
+		movies[i].title = title
+	}
+	if movies[0].title == "" && movies[1].title == "" {
+		return &movie{}, fmt.Errorf("failed to create movie from path %v", path)
+	}
+	for _, m := range movies {
+		if m.title != "" && m.YearValid() {
+			return m, nil
 		}
 	}
-	if mov.title == "" {
-		errs = append(errs, fmt.Errorf("failed to create movie from path \"%s\"; invalid movie %v", path, *mov))
+	for _, m := range movies {
+		if m.title != "" {
+			return m, nil
+		}
 	}
-	return mov, errors.Join(errs...)
+	return &movie{}, fmt.Errorf("could not determine movie from %v; parsed values %v", path, movies)
 }
 
 type Linkable interface {
@@ -375,7 +380,6 @@ func tmdbLookup(l Linkable) {
 				continue
 			}
 			v.title = res.Title
-			fmt.Println(v, res)
 			if !v.YearValid() {
 				v.year = res.ReleaseDate.Year()
 			}
