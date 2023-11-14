@@ -187,5 +187,23 @@ func TestEpisodeFromPath(t *testing.T) {
 }
 
 func TestTitlePermutations(t *testing.T) {
-
+	cases := []struct {
+		title string
+		want  []string
+	}{{
+		title: "",
+		want:  []string{},
+	}, {
+		title: "A B C D E F G",
+		want:  []string{"A B C D E F G", "A B C D E F", "A B C D E", "A B C D"},
+	}, {
+		title: "[foo] (bar) baz",
+		want:  []string{"[foo] (bar) baz", "[foo] (bar)", "baz"},
+	}}
+	for _, c := range cases {
+		res := titlePermutations(c.title)
+		if diff := cmp.Diff(c.want, res); diff != "" {
+			t.Errorf("titleVariants() mismatch (-want +got):\n%s", diff)
+		}
+	}
 }

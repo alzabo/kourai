@@ -369,7 +369,7 @@ func tmdbLookup(l Linkable) {
 		v.series = show.Name
 		v.title = ep.Name
 	case *movie:
-		for _, i := range titleVariants(v.title, strings.Count(v.title, " ")/2+1) {
+		for _, i := range titlePermutations(v.title) {
 			var searchOpts map[string]string
 			if v.YearValid() {
 				searchOpts = map[string]string{"year": fmt.Sprint(v.year)}
@@ -393,6 +393,40 @@ func tmdbLookup(l Linkable) {
 // non-alphanum surrounded by spaces
 func titleVariants(t string, max int) []string {
 	items := strings.Split(t, " ")
+	new := []string{}
+	for i := 0; i < max && i < len(items); i++ {
+		new = append(new, strings.Join(items[:len(items)-i], " "))
+	}
+	return new
+}
+
+var tagExpr = regexp.MustCompile(`(\[[^\]]*\]|\([^\)]*\))`)
+
+func titlePermutations(title string) []string {
+	new := permutation(title)
+	if tagExpr.FindString(title) != "" {
+		stripped := tagExpr.ReplaceAllString(title, "")
+	outer:
+		for _, i := range permutation(stripped) {
+			for _, j := range new {
+				if i == j {
+					break outer
+				}
+			}
+			new = append(new, i)
+		}
+	}
+	return new
+}
+
+func permutation(str string) []string {
+	items := []string{}
+	for _, i := range strings.Split(str, " ") {
+		if i != "" {
+			items = append(items, i)
+		}
+	}
+	max := len(items)/2 + 1
 	new := []string{}
 	for i := 0; i < max && i < len(items); i++ {
 		new = append(new, strings.Join(items[:len(items)-i], " "))
