@@ -197,7 +197,7 @@ func TestTitlePermutations(t *testing.T) {
 		title: "A B C D E F G",
 		want:  []string{"A B C D E F G", "A B C D E F", "A B C D E", "A B C D"},
 	}, {
-		title: "[foo] (bar) baz",
+		title: "[foo] (bar) - baz",
 		want:  []string{"[foo] (bar) baz", "[foo] (bar)", "baz"},
 	}}
 	for _, c := range cases {

@@ -404,7 +404,7 @@ var tagExpr = regexp.MustCompile(`(\[[^\]]*\]|\([^\)]*\))`)
 
 func titlePermutations(title string) []string {
 	new := permutation(title)
-	if tagExpr.FindString(title) != "" {
+	if tagExpr.MatchString(title) {
 		stripped := tagExpr.ReplaceAllString(title, "")
 	outer:
 		for _, i := range permutation(stripped) {
@@ -419,12 +419,15 @@ func titlePermutations(title string) []string {
 	return new
 }
 
+var singleNonWordExpr = regexp.MustCompile(`^[^0-9A-Za-z]$`)
+
 func permutation(str string) []string {
 	items := []string{}
 	for _, i := range strings.Split(str, " ") {
-		if i != "" {
-			items = append(items, i)
+		if i == "" || singleNonWordExpr.MatchString(i) {
+			continue
 		}
+		items = append(items, i)
 	}
 	max := len(items)/2 + 1
 	new := []string{}
